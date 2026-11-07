@@ -18,3 +18,20 @@ Brush 앱(`brush_app.exe`)으로 학습함. CLI도 있음 (`brush_app.exe --help
 ## 확인
 - SuperSplat(https://superspl.at/editor)에 PLY를 끌어다 놓으면 바로 확인 가능
 - Unity: aras-p UnityGaussianSplatting 플러그인으로 PLY → 에셋 변환
+
+## 설정 실험 기록 (해결 방향 3, 2026-11)
+Brush 에서 쓸 수 있는 관련 옵션: `--scale-loss-weight`(크기 벌점), `--growth-grad-threshold` / `--growth-select-fraction`(스플랫 늘어나는 정도).
+배경 무작위화는 Brush 에 없음 → `colab/` 노트북(gsplat)에서 테스트.
+
+방 6, 나머지 설정은 기존과 동일 (`tools/ply_stats.py` 로 측정):
+
+| 버전 | 바꾼 것 | 스플랫 수 | 바늘형(>10배) | 큰 스플랫 상위 1% 길이 | 반투명(<0.5) |
+|---|---|---|---|---|---|
+| A 기존 | - | 164만 | 12.6% | 0.53 | 95% |
+| B | scale-loss 1e-7 | 146만 | 18.3% | 0.47 | 95% |
+| C | scale-loss 1e-6 | 133만 | 15.4% | 0.32 (−40%) | 95% |
+| D | growth 0.00002 / 0.2 | 300만 (상한) | - | - | - |
+
+- 크기 벌점은 모양(바늘)이 아니라 크기만 줄임. 반투명 비율은 어떤 설정으로도 그대로
+- 방 6 은 원래 줄무늬가 적어 눈으로는 차이 없음 → **실험은 줄무늬가 심한 복도에서 할 것**
+- E (C + D) 로 구간 1~6 학습 → `brush_experiment.ps1`. 복도에서는 성장 강화 때문에 3,500 스텝에 300만 상한 도달

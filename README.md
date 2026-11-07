@@ -77,3 +77,5 @@ RTX 3060 Ti 기준 exhaustive 정합 전체 약 45시간.
 |---|---|
 | `tools/flatten.py` | PLY 후처리: 큰 평면(벽·바닥·천장) 근처 스플랫을 납작하게 (효과 미미했음) |
 | `tools/flatten2.py` | 위와 같은데 구역별 국소 평면 버전 (휜 복도용) |
+| `tools/ply_stats.py` | PLY 여러 개의 스플랫 통계 비교 (개수, 바늘형 비율, 크기, 반투명 비율) |
+| `3_train/brush_experiment.ps1` | 여러 구간을 같은 실험 설정으로 연속 학습 |
