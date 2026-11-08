@@ -69,13 +69,31 @@ RTX 3060 Ti 기준 exhaustive 정합 전체 약 45시간.
 - **촬영:** 벽을 정면으로 보는 구간 넣기, 노출·화이트밸런스 고정, 셔터 1/100초 이상. 앞만 보고 찍으면 벽에 줄무늬가 생김
 - **마커:** 단색 벽에는 번호를 서로 다르게 적은 빨간 A4 종이를 2~3m 간격으로 붙이기
 
-## colab (Difix · 배경 무작위화 실험)
-`colab/difix_colab.ipynb` 를 Google Colab 에서 열어 위에서부터 실행. 데이터는 구글 드라이브 `3DGS/colab/<방 이름>` 에 `images`, `sparse` 를 복사해 두면 됨. `nc_*.py` 는 노트북 안에도 들어 있음.
+## colab (Difix · 2DGS · 배경 무작위화 실험)
+구글 Colab 에서 열어 위에서부터 **런타임 → 모두 실행**. 데이터는 구글 드라이브 `3DGS/colab/<구간 이름>` 에 `images`, `sparse` 를 복사해 두면 됨 (Brush 에 넣던 `Nb\data` 와 같은 구조). 결과는 `3DGS/colab/out/<구간 이름>` 에 저장됨.
+
+| 노트북 | 내용 |
+|---|---|
+| `colab/difix_colab.ipynb` | gsplat 기본 학습 → NVIDIA Difix 보정 학습 (+ 배경 무작위화 선택). `nc_*.py` 는 노트북 안에도 들어 있음 |
+| `colab/gs2d_colab.ipynb` | 2DGS(공식 구현 `hbb1/2d-gaussian-splatting`) 학습 → 3DGS 형식 PLY 변환 |
+
+**CUDA 컴파일이 들어가는 부분 (Windows 로컬보다 Colab 권장)**
+- `gs2d_colab.ipynb` 2번 셀이 `diff-surfel-rasterization`, `simple-knn` 을 직접 컴파일함 (10~20분). 저장소를 `--recursive` 로 받아야 하위 모듈이 들어옴
+- 새 컴파일러에서 나는 오류를 막으려고 `#include <cstdint>`, `<cfloat>` 를 자동으로 끼워 넣음. simple-knn 은 gitlab 이 막히면 GitHub 미러로 대체
+- GPU 종류에 맞게 `TORCH_CUDA_ARCH_LIST` 지정 (T4=7.5, L4=8.9)
+- gsplat(`difix_colab`)도 처음 학습할 때 10~30분 컴파일함 ("setting up cuda" 메시지)
+- 무료 Colab 은 GPU 사용 한도가 있음. 한도 소진 시 반나절~하루 뒤 풀림. 끝나면 **런타임 연결 해제 및 삭제**
+
+**주의**
+- 2DGS PLY 는 크기 값이 2개(`scale_0`, `scale_1`)라 SuperSplat/Unity 에서 그대로는 안 보임 → `colab/nc_ply2d_to_3d.py` 로 세 번째 크기를 작게 채워서 변환 (numpy 만 있으면 PC 에서도 실행됨)
+- Unity 플러그인(aras-p)은 3DGS 만 지원하므로 2DGS 결과는 "줄무늬가 줄어드는지" 확인용
+- 2DGS, Difix 는 모두 비상업 연구용 라이선스
 
 ## tools
 | 파일 | 내용 |
 |---|---|
 | `tools/flatten.py` | PLY 후처리: 큰 평면(벽·바닥·천장) 근처 스플랫을 납작하게 (효과 미미했음) |
 | `tools/flatten2.py` | 위와 같은데 구역별 국소 평면 버전 (휜 복도용) |
+| `colab/nc_ply2d_to_3d.py` | 2DGS PLY → 3DGS 형식 PLY 변환 |
 | `tools/ply_stats.py` | PLY 여러 개의 스플랫 통계 비교 (개수, 바늘형 비율, 크기, 반투명 비율) |
 | `3_train/brush_experiment.ps1` | 여러 구간을 같은 실험 설정으로 연속 학습 |
