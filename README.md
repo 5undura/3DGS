@@ -70,23 +70,27 @@ RTX 3060 Ti 기준 exhaustive 정합 전체 약 45시간.
 - **마커:** 단색 벽에는 번호를 서로 다르게 적은 빨간 A4 종이를 2~3m 간격으로 붙이기
 
 ## colab (Difix · 2DGS · 배경 무작위화 실험)
-구글 Colab 에서 열어 위에서부터 **런타임 → 모두 실행**. 데이터는 구글 드라이브 `3DGS/colab/<구간 이름>` 에 `images`, `sparse` 를 복사해 두면 됨 (Brush 에 넣던 `Nb\data` 와 같은 구조). 결과는 `3DGS/colab/out/<구간 이름>` 에 저장됨.
+구글 Colab 에서 노트북을 열고 **런타임 유형을 T4 GPU** 로 바꾼 뒤 **런타임 → 모두 실행**. 결과는 드라이브 `3DGS/colab/out/<구간 이름>` 에 저장됨.
 
 | 노트북 | 내용 |
 |---|---|
-| `colab/difix_colab.ipynb` | gsplat 기본 학습 → NVIDIA Difix 보정 학습 (+ 배경 무작위화 선택). `nc_*.py` 는 노트북 안에도 들어 있음 |
-| `colab/gs2d_colab.ipynb` | 2DGS(공식 구현 `hbb1/2d-gaussian-splatting`) 학습 → 3DGS 형식 PLY 변환 |
+| `colab/gs2d_colab.ipynb` | 2DGS(공식 구현 `hbb1/2d-gaussian-splatting`) 학습 → 3DGS 형식 PLY 변환. 데이터 위치는 1번 셀의 `DRIVE_DATA` 하나만 지정 |
+| `colab/difix_colab.ipynb` | gsplat 기본 학습 → NVIDIA Difix 보정 학습 (+ 배경 무작위화 선택). 데이터는 `3DGS/colab/<구간 이름>` |
 
-**CUDA 컴파일이 들어가는 부분 (Windows 로컬보다 Colab 권장)**
-- `gs2d_colab.ipynb` 2번 셀이 `diff-surfel-rasterization`, `simple-knn` 을 직접 컴파일함 (10~20분). 저장소를 `--recursive` 로 받아야 하위 모듈이 들어옴
-- 새 컴파일러에서 나는 오류를 막으려고 `#include <cstdint>`, `<cfloat>` 를 자동으로 끼워 넣음. simple-knn 은 gitlab 이 막히면 GitHub 미러로 대체
-- GPU 종류에 맞게 `TORCH_CUDA_ARCH_LIST` 지정 (T4=7.5, L4=8.9)
-- gsplat(`difix_colab`)도 처음 학습할 때 10~30분 컴파일함 ("setting up cuda" 메시지)
-- 무료 Colab 은 GPU 사용 한도가 있음. 한도 소진 시 반나절~하루 뒤 풀림. 끝나면 **런타임 연결 해제 및 삭제**
+데이터는 Brush 에 넣던 `Nb\data` 폴더(`images`, `sparse`)를 드라이브에 그대로 올리면 됨.
+
+**gs2d_colab 이 알아서 처리하는 것**
+- GPU 런타임이 아니거나 데이터 폴더가 틀리면 첫 셀에서 멈추고 이유를 출력
+- CUDA 컴파일(`diff-surfel-rasterization`, `simple-knn`, 5~10분). 이미 설치돼 있으면 건너뜀. 최신 컴파일러용 `#include` 보강, simple-knn 은 gitlab 이 막히면 GitHub 미러 사용. 실패하면 오류 원인을 출력
+- 로컬 복사본만 960 폭으로 축소 (4K 그대로 읽으면 Colab RAM 12GB 초과로 `^C` 와 함께 끊김)
+- 5,000 스텝마다 체크포인트 → 런타임이 끊겨도 다시 "모두 실행" 하면 이어서 학습. 끝나면 체크포인트 자동 삭제
+- 2DGS PLY(크기 값 2개)를 SuperSplat/Unity 용 3DGS 형식으로 변환 (`colab/nc_ply2d_to_3d.py` 와 같은 내용, 이 스크립트는 PC 에서도 numpy 만으로 실행됨)
 
 **주의**
-- 2DGS PLY 는 크기 값이 2개(`scale_0`, `scale_1`)라 SuperSplat/Unity 에서 그대로는 안 보임 → `colab/nc_ply2d_to_3d.py` 로 세 번째 크기를 작게 채워서 변환 (numpy 만 있으면 PC 에서도 실행됨)
+- 런타임이 새로 켜질 때마다 설치(컴파일)를 다시 해야 함
+- 무료 Colab 은 GPU 사용 한도가 있음. 끝나면 **런타임 → 런타임 연결 해제 및 삭제**. 한도 소진 시 반나절~하루 뒤 풀림
 - Unity 플러그인(aras-p)은 3DGS 만 지원하므로 2DGS 결과는 "줄무늬가 줄어드는지" 확인용
+- gsplat(`difix_colab`)도 처음 학습할 때 10~30분 컴파일함 ("setting up cuda" 메시지)
 - 2DGS, Difix 는 모두 비상업 연구용 라이선스
 
 ## tools
