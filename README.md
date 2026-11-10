@@ -75,7 +75,7 @@ RTX 3060 Ti 기준 exhaustive 정합 전체 약 45시간.
 | 노트북 | 내용 |
 |---|---|
 | `colab/gs2d_colab.ipynb` | 2DGS(공식 구현 `hbb1/2d-gaussian-splatting`) 학습 → 3DGS 형식 PLY 변환. 데이터 위치는 1번 셀의 `DRIVE_DATA` 하나만 지정 |
-| `colab/difix_colab.ipynb` | gsplat 기본 학습 → NVIDIA Difix 보정 학습 (+ 배경 무작위화 선택). 데이터는 `3DGS/colab/<구간 이름>` |
+| `colab/difix_colab.ipynb` | gsplat(MCMC, 300만 상한) 기본 학습 → NVIDIA Difix 보정 학습 (+ 배경 무작위화 선택). 데이터 위치는 1번 셀의 `DRIVE_DATA`. T4 기준 약 4~5시간, 끊기면 이어서 함 |
 
 데이터는 Brush 에 넣던 `Nb\data` 폴더(`images`, `sparse`)를 드라이브에 그대로 올리면 됨.
 
@@ -91,6 +91,8 @@ RTX 3060 Ti 기준 exhaustive 정합 전체 약 45시간.
 - 무료 Colab 은 GPU 사용 한도가 있음. 끝나면 **런타임 → 런타임 연결 해제 및 삭제**. 한도 소진 시 반나절~하루 뒤 풀림
 - Unity 플러그인(aras-p)은 3DGS 만 지원하므로 2DGS 결과는 "줄무늬가 줄어드는지" 확인용
 - gsplat(`difix_colab`)도 처음 학습할 때 10~30분 컴파일함 ("setting up cuda" 메시지)
+- `difix_colab` 도 데이터 확인, 설치 건너뛰기, 5,000 스텝마다 저장·이어하기가 들어 있음. 4K 원본은 로컬에 복사하지 않고 줄인 사진(`images_4`)만 만듦
+- 방 6 실험에서 gsplat 기본(default) 방식은 floater 가 많아 Brush 보다 나빴음 → MCMC 로 변경
 - 2DGS, Difix 는 모두 비상업 연구용 라이선스
 
 ## tools
