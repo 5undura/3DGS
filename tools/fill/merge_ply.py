@@ -11,8 +11,12 @@ def read(path):
             if l.startswith("element vertex"): n = int(l.split()[-1])
             elif l.startswith("property"): names.append(l.split()[-1])
             elif l == "end_header": break
-        a = np.fromfile(f, dtype="<f4", count=n * len(names)).reshape(n, len(names))
-    return names, a, [h for h in head if h.startswith("comment")]
+        offset = f.tell()
+    # 파일 객체에서 바로 읽으면 버퍼 위치가 어긋나 0개가 읽히는 경우가 있음 -> 헤더 길이로 다시 엶
+    a = np.fromfile(path, dtype="<f4", count=n * len(names), offset=offset)
+    if a.size != n * len(names):
+        raise SystemExit(f"{path}: {a.size} 값만 읽힘 (필요 {n * len(names)}). 구글 드라이브 파일이면 PC 에 내려받아졌는지 확인")
+    return names, a.reshape(n, len(names)), [h for h in head if h.startswith("comment")]
 
 out, srcs = sys.argv[1], sys.argv[2:]
 names, first, comments = read(srcs[0]); parts = [first]
