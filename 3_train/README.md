@@ -60,7 +60,7 @@ Brush 에서 쓸 수 있는 관련 옵션: `--scale-loss-weight`(크기 벌점),
 - 같은 시작점 + 위아래 보정 Difix 는 Colab 에서 진행 중 (`corridor1_fill`)
 
 #### 구간 2~6 일괄 적용 (`tools/fill/fill_all.ps1`, 2026-11-14)
-구간당 분석 수 분 + Brush 학습 약 12~13분(3060 Ti, 30,000 스텝). 결과는 PC `F:\Sample\6\c\Nc_fill\fill_with_backdrop.ply`.
+구간당 분석 수 분 + Brush 학습 약 30~35분(3060 Ti, 30,000 스텝), 2~6 전체 약 3시간. 결과는 PC `F:\Sample\6\c\Nc_fill\fill_with_backdrop.ply`.
 
 | 구간 | 바탕층 스플랫 | 천장 높이 판정 (`fill_diag.png`) |
 |---|---|---|
