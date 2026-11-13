@@ -2,6 +2,8 @@
 1) Difix 모델은 처음 보정할 때만 불러옴 (기본 학습 중 GPU 메모리 절약)
 2) 보정할 '새 각도' = 학습 카메라를 좌우로 돌려 벽을 보게 한 각도.
    라운드마다 NC_STEP_DEG 씩 더 돌리고, 최대 NC_MAX_DEG 까지.
+   NC_PITCH_MAX > 0 이면 위(천장)/아래(바닥)로 돌린 각도도 추가 (NC_PITCH_STEP 씩, 최대 NC_PITCH_MAX).
+   NC_NO_ALPHA=1 이면 렌더링이 비어 있던 곳도 보정 사진으로 학습 (빈 곳 채우기).
 """
 import sys
 
@@ -41,8 +43,19 @@ new_fix = '''        if self.difix is None:
             p = base.copy()
             p[:, :3, :3] = base[:, :3, :3] @ Ry  # yaw around the camera's own up/down axis
             rotated.append(p)
+        # [NoClip] also look up (ceiling) / down (floor) when NC_PITCH_MAX > 0
+        pmax = float(os.environ.get("NC_PITCH_MAX", 0))
+        if pmax > 0:
+            pang = np.deg2rad(min(pmax, k * float(os.environ.get("NC_PITCH_STEP", 10))))
+            for sgn in (1.0, -1.0):
+                c, s = np.cos(sgn * pang), np.sin(sgn * pang)
+                Rx = np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+                p = base.copy()
+                p[:, :3, :3] = base[:, :3, :3] @ Rx  # pitch around the camera's own right axis
+                rotated.append(p)
         novel_poses = np.concatenate(rotated, 0)
-        print(f"[NoClip] fix round {k}: {len(novel_poses)} views, yaw +-{np.rad2deg(ang):.0f} deg")
+        print(f"[NoClip] fix round {k}: {len(novel_poses)} views, yaw +-{np.rad2deg(ang):.0f} deg"
+              + (f", pitch +-{np.rad2deg(pang):.0f} deg" if pmax > 0 else ""))
 '''
 old_alpha = '''        parser.alpha_mask_paths = [f"{self.render_dir}/novel/{step}/Alpha/{i:04d}.png" for i in range(len(novel_poses))]
 '''
