@@ -1,5 +1,15 @@
 # 빈 곳 채우기 (바닥·천장·벽 바탕층 + 시작점 보강)
 
+## 바로 쓰기 (PC)
+```powershell
+powershell -ExecutionPolicy Bypass -File <저장소>\tools\fill\fill_all.ps1
+```
+`fill_all.ps1` 안의 `$Sections`(기본 2..6), `$Work`(기본 F:\Sample\6), `$Brush` 경로를 확인. 구간마다
+`fill_section.py`(분석, 수 분) → Brush 학습(약 30분) → `merge_ply.py`(바탕층 합치기) 순서. 결과: `c\Nc_fill\fill_with_backdrop.ply`.
+끝난 단계는 건너뛰므로 끊겨도 다시 실행하면 이어서 함. 진행 기록: `F:\Sample\6\fill_all_log.txt`, 구간별 진단 그림: `Nc_fill\fill_diag.png`.
+
+## 개발 과정 스크립트 (복도 1 에서 단계별로 만든 것, fill_section.py 로 합쳐짐)
+
 복도처럼 "상자" 모양인 구간에서, 스플랫이 옅거나 빈 곳(특히 천장)을 채우는 도구.
 
 1. `load.py` – COLMAP `sparse/0` 읽기 → `scene.pkl`
