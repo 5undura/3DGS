@@ -11,9 +11,8 @@ def read(path):
             if l.startswith("element vertex"): n = int(l.split()[-1])
             elif l.startswith("property"): names.append(l.split()[-1])
             elif l == "end_header": break
-        offset = f.tell()
-    # 파일 객체에서 바로 읽으면 버퍼 위치가 어긋나 0개가 읽히는 경우가 있음 -> 헤더 길이로 다시 엶
-    a = np.fromfile(path, dtype="<f4", count=n * len(names), offset=offset)
+        # np.fromfile 은 구글 드라이브(G:) 같은 가상 드라이브에서 0개를 읽는 경우가 있어 일반 read 로 읽음
+        a = np.frombuffer(f.read(n * len(names) * 4), dtype="<f4")
     if a.size != n * len(names):
         raise SystemExit(f"{path}: {a.size} 값만 읽힘 (필요 {n * len(names)}). 구글 드라이브 파일이면 PC 에 내려받아졌는지 확인")
     return names, a.reshape(n, len(names)), [h for h in head if h.startswith("comment")]
@@ -30,5 +29,5 @@ A = np.concatenate(parts)
 with open(out, "wb") as f:
     h = "ply\nformat binary_little_endian 1.0\n" + "".join(c + "\n" for c in comments)
     h += "element vertex %d\n" % len(A) + "".join("property float %s\n" % k for k in names) + "end_header\n"
-    f.write(h.encode("ascii")); A.astype("<f4").tofile(f)
+    f.write(h.encode("ascii")); f.write(A.astype("<f4").tobytes())
 print(out, f"{len(A):,} splats", [len(p) for p in parts])
