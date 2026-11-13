@@ -11,8 +11,14 @@ def read(path):
             if l.startswith("element vertex"): n = int(l.split()[-1])
             elif l.startswith("property"): names.append(l.split()[-1])
             elif l == "end_header": break
-        # np.fromfile 은 구글 드라이브(G:) 같은 가상 드라이브에서 0개를 읽는 경우가 있어 일반 read 로 읽음
-        a = np.frombuffer(f.read(n * len(names) * 4), dtype="<f4")
+        # 구글 드라이브(G:) 같은 가상 드라이브는 큰 덩어리를 한 번에 읽으면 실패함 -> 32MB 씩 나눠 읽음
+        need = n * len(names) * 4
+        buf = bytearray(need); mv = memoryview(buf); got = 0
+        while got < need:
+            chunk = f.read(min(32 << 20, need - got))
+            if not chunk: break
+            mv[got:got + len(chunk)] = chunk; got += len(chunk)
+        a = np.frombuffer(bytes(mv[:got]), dtype="<f4")
     if a.size != n * len(names):
         raise SystemExit(f"{path}: {a.size} 값만 읽힘 (필요 {n * len(names)}). 구글 드라이브 파일이면 PC 에 내려받아졌는지 확인")
     return names, a.reshape(n, len(names)), [h for h in head if h.startswith("comment")]
