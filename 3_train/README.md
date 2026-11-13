@@ -41,13 +41,13 @@ Brush 에서 쓸 수 있는 관련 옵션: `--scale-loss-weight`(크기 벌점),
 `colab/gs2d_colab.ipynb`, T4, 960 폭, 30,000 스텝, SH 2 → 약 1시간 30분.
 - 결과: 표면이 매끈하게 뭉개져 메쉬처럼 보이고 얼룩·질감·세부 구조가 사라짐
 - 원인 추정: 2DGS 는 화질보다 표면 형태를 우선하는 방식(법선 손실로 평평하게 폄) + Colab RAM 때문에 Brush(1920)의 절반 해상도로 학습 + **스플랫 약 51만 개**(Brush 300만의 1/6, 2DGS 기본 설정은 상한 없이 이 정도에서 멈춤)
-- 줄무늬·비침 감소 여부는 아직 확인 전 (옆벽 비스듬한 각도, 분홍 배경으로 `splat2\1.ply` 와 비교할 것)
-- 결과 PLY: 드라이브 `3DGS/colab/out/corridor1/gs2d/ply/corridor1_2dgs_{10000,20000,30000}.ply`
+- 줄무늬·비침 감소 여부는 아직 확인 전 (옆벽 비스듬한 각도, 분홍 배경으로 `3_학습결과/4차_Brush_기본/1.ply` 와 비교할 것)
+- 결과 PLY: 드라이브 `3DGS/3_학습결과/4차_colab/out/corridor1/gs2d/ply/corridor1_2dgs_{10000,20000,30000}.ply`
 
 ### Difix (해결 방향 4, 복도 1)
 `colab/difix_colab.ipynb`, T4, 960x540, gsplat MCMC 300만 상한. ① 기본 30,000 스텝 → ② Difix 보정 60,000 스텝까지 (4,000 스텝마다 8라운드, 좌우 15°→60° 돌린 각도 약 120장씩 보정).
-비교 이미지 `3DGS/colab/out/corridor1/compare.png` (카메라 4곳 × 정면·45°·70°, 분홍 = 비어 있는 곳):
+비교 이미지 `3DGS/3_학습결과/4차_colab/out/corridor1/compare.png` (카메라 4곳 × 정면·45°·70°, 분홍 = 비어 있는 곳):
 - 옆 각도에서 벽의 번짐·검은 얼룩이 눈에 띄게 줄고, 문·배전반·게시판 윤곽이 또렷해짐
 - 바닥·벽의 분홍(비어서 배경이 보이는 곳)도 대부분 줄었음. 다만 천장 쪽 분홍 얼룩과 70° 로 벽에 바짝 붙은 화면의 뭉개짐은 남음
 - 주의: 비교 각도(45°)가 Difix 가 보정에 쓴 각도 범위(최대 60°) 안이라 유리한 비교임 → VR 에서 실제로 걸어 다니며 확인 필요
-- 결과 PLY: 드라이브 `3DGS/colab/out/corridor1/ply/corridor1_{base,difix}.ply` (각 300만 개, 492MB)
+- 결과 PLY: 드라이브 `3DGS/3_학습결과/4차_colab/out/corridor1/ply/corridor1_{base,difix}.ply` (각 300만 개, 492MB)
