@@ -1,17 +1,17 @@
-﻿# 3차 촬영(F:\Sample\4\b1~b7) 빈 곳 채우기: 분석 -> Brush 학습 -> 바탕층 합치기
-# 사용: powershell -ExecutionPolicy Bypass -File F:\Sample\fill\fill_3rd.ps1
+﻿# 3차 촬영(F:\Sample\3차\4_정합데이터\1~7) 빈 곳 채우기: 분석 -> Brush 학습 -> 바탕층 합치기
+# 사용: powershell -ExecutionPolicy Bypass -File F:\Sample\tools\fill\fill_3rd.ps1
 $ErrorActionPreference = "Continue"
 $Sections = 1..7
-$Work   = "F:\Sample\4"
-$Brush  = "F:\Sample\brush\brush_app.exe"
+$Work   = "F:\Sample\3차"
+$Brush  = "F:\Sample\tools\brush\brush_app.exe"
 $Py     = "python"
-$Here   = "F:\Sample\fill"
+$Here   = "F:\Sample\tools\fill"
 
-Start-Transcript -Path (Join-Path $Work "fill_3rd_log.txt") -Append
+Start-Transcript -Path (Join-Path $Work "기록\fill_3rd_log.txt") -Append
 foreach ($n in $Sections) {
-    $data = Join-Path $Work "b$n"
-    $fill = Join-Path $Work "b${n}_fill"
-    $out  = Join-Path $Work "c${n}_fill"
+    $data = Join-Path $Work "4_정합데이터\$n"
+    $fill = Join-Path $Work "4_정합데이터\${n}_fill"
+    $out  = Join-Path $Work "5_학습결과\fill\$n"
     if (-not (Test-Path "$data\sparse\0\images.bin")) { Write-Host "[$n] no sparse, skip"; continue }
     Write-Host "===== [$n] start $(Get-Date)"
     if (-not (Test-Path "$out\backdrop.ply")) {

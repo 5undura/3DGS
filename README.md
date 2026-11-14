@@ -84,6 +84,21 @@ RTX 3060 Ti 기준 exhaustive 정합 전체 약 45시간.
 | `3_학습결과/4차_colab/out/<구간>` | Colab 실험 결과: `ply/`(Difix base·difix), `gs2d/ply/`(2DGS), `compare.png` |
 | `4_게임빌드` | Unity VR 빌드 |
 
+## 작업 PC 폴더 구조 (`F:\Sample`, `tools/fill/reorganize.ps1` 로 정리)
+| 폴더 | 내용 |
+|---|---|
+| `1차`, `2차` | 초기 촬영 압축본 |
+| `3차\0_소니사진` (+`.zip`) | 소니 사진 1,864장 |
+| `3차\1_영상` | 3차 영상 + 방 추가 촬영(`방추가촬영_*`) |
+| `3차\2_프레임`, `3_COLMAP`, `4_정합데이터` | 구간 1~7 프레임 / COLMAP 작업 / undistort 데이터(+`N_fill` 보강본) |
+| `3차\5_학습결과` | `Brush\1~7.ply`, `Brush_flatten실험`, `fill\N`(빈 곳 채우기·정리본) |
+| `4차\0_영상` | Osmo 영상 0~6 |
+| `4차\1_프레임`, `2_정합데이터` | `Na` 프레임 / `Nb\data`(+`data_fill`) |
+| `4차\3_학습결과` | `Nc`(기본 Brush), `Nc_fill`(빈 곳 채우기·정리본), `E설정_scale+growth` |
+| `tools` | `brush`, `colmap`, `ffmpeg_tool`, `fill`(이 저장소의 스크립트), `예전_스크립트` |
+| `텍스처`, `실험_기타` | Unity 텍스처 / Postshot·COLMAP 시험 등 |
+학습 중간 저장본(`export_05000~25000`)은 삭제하고 최종 `export_30000` 만 남김.
+
 ## colab (Difix · 2DGS · 배경 무작위화 실험)
 구글 Colab 에서 노트북을 열고 **런타임 유형을 T4 GPU** 로 바꾼 뒤 **런타임 → 모두 실행**. 결과는 드라이브 `3DGS/3_학습결과/4차_colab/out/<구간 이름>` 에 저장됨.
 

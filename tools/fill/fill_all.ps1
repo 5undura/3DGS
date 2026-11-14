@@ -3,19 +3,19 @@
 # 끝난 단계는 건너뛰므로 중간에 끊겨도 다시 실행하면 이어서 함. 구간당 약 30~40분.
 $ErrorActionPreference = "Continue"
 $Sections = 2..6
-$Work   = "F:\Sample\6"                     # b\Nb\data, c\Nc 가 있는 폴더
-$Brush  = "F:\Sample\brush\brush_app.exe"
+$Work   = "F:\Sample\4차"                   # 2_정합데이터\Nb\data, 3_학습결과\Nc 가 있는 폴더
+$Brush  = "F:\Sample\tools\brush\brush_app.exe"
 $Py     = "python"
 $Here   = $PSScriptRoot
 
-Start-Transcript -Path (Join-Path $Work "fill_all_log.txt") -Append
+Start-Transcript -Path (Join-Path $Work "기록\fill_all_log.txt") -Append
 & $Py -c "import scipy, cv2, numpy" 2>$null
 if ($LASTEXITCODE -ne 0) { & $Py -m pip install scipy opencv-python numpy matplotlib }
 
 foreach ($n in $Sections) {
-    $data = Join-Path $Work "b\${n}b\data"
-    $fill = Join-Path $Work "b\${n}b\data_fill"
-    $out  = Join-Path $Work "c\${n}c_fill"
+    $data = Join-Path $Work "2_정합데이터\${n}b\data"
+    $fill = Join-Path $Work "2_정합데이터\${n}b\data_fill"
+    $out  = Join-Path $Work "3_학습결과\${n}c_fill"
     if (-not (Test-Path "$data\sparse\0\images.bin")) { Write-Host "[$n] $data\sparse\0 없음 (건너뜀)"; continue }
     Write-Host "===== [$n] 시작 $(Get-Date)"
 
