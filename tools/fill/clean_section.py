@@ -6,6 +6,8 @@
   B. 천장 위로 일정 이상 올라간 스플랫
   C. 투과 부유물: 여러 사진에서 '실제로 보인 표면(COLMAP 점)보다 확실히 앞 허공' 에 있는 스플랫
      (점이 없는 천장 같은 곳은 판정 안 함. A·B 는 평면도 안쪽에만 적용)
+  D. 허공 부유물: 평면도 안쪽에서 실제 관측된 표면(COLMAP 점) 어디서도 CLEAN_GAP(기본 0.08 x 축척 ≈ 17cm) 이상 떨어진 스플랫
+     (촬영 시점에서는 안 보이고 VR 처럼 다른 각도에서만 보이는 부유물). 벽에서 약 25cm 안쪽은 무늬 없는 벽면일 수 있어 제외
 지운 스플랫만 모은 PLY 를 함께 저장 -> 열어서 진짜 물체가 지워지지 않았는지 확인
 """
 import sys, os, struct
@@ -146,10 +148,15 @@ for vi in range(0, len(ims), 3):
     ag = known & (np.abs(z[ii] - ds) < ds * 0.15)
     through[ii[th]] += 1; agree[ii[ag]] += 1
 rC = (through >= 4) & (through > 3 * agree)
+# D: 허공 부유물. 평면도 안쪽, 바닥·천장에서 떨어진 높이에서 실제 관측된 표면(COLMAP 점)과도 멀리 떨어진 스플랫.
+#    촬영 시점에서는 안 보이고 다른 각도(VR)에서만 보이는 부유물을 잡기 위함. 배관·벽·물체는 점이 있어 안전
+GAPD = float(os.environ.get("CLEAN_GAP", 0.08)) * S
+dsurf, _ = cKDTree(X[ERR < 2]).query(Xw, distance_upper_bound=GAPD * 3)
+rD = inside & (dsurf > GAPD) & (wd > 0.12 * S) & (P[:, 2] > 0.1 * S) & (P[:, 2] < H - 0.1 * S)   # 벽(평면도 경계)에서 25cm 안쪽은 제외: 무늬 없는 벽면 보호
 if os.environ.get("CLEAN_DEBUG"): np.savez(os.path.splitext(POUT)[0] + "_votes.npz", through=through, agree=agree, opa=opa, P=P, inside=inside)
-rem = rA | rB | rC
+rem = rA | rB | rC | rD
 print(f"splats {nv:,} -> remove {rem.sum():,} ({rem.mean()*100:.1f}%)  "
-      f"[below floor {rA.sum():,} / above ceiling {rB.sum():,} / see-through floaters {rC.sum():,}]")
+      f"[below floor {rA.sum():,} / above ceiling {rB.sum():,} / see-through {rC.sum():,} / air (far from surfaces) {rD.sum():,}]")
 
 def write(path, M):
     with open(path, "wb") as f:
@@ -158,5 +165,5 @@ def write(path, M):
         f.write(h.encode("ascii")); f.write(np.ascontiguousarray(M, "<f4").tobytes())
 write(POUT, A[~rem]); print("saved", POUT)
 if PREM: write(PREM, A[rem]); print("removed ->", PREM)
-np.savez(os.path.splitext(POUT)[0] + "_clean_info.npz", P=P[::10], rem=rem[::10], code=(rA + 2*rB + 4*rC)[::10].astype(np.int8),
+np.savez(os.path.splitext(POUT)[0] + "_clean_info.npz", P=P[::10], rem=rem[::10], code=(rA + 2*rB + 4*rC + 8*rD)[::10].astype(np.int8),
          Cf=Cf, g=g, mn=mn, cell=cell, H=H, hcam=hcam)
