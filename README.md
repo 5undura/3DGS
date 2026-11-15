@@ -104,6 +104,7 @@ RTX 3060 Ti 기준 exhaustive 정합 전체 약 45시간.
 
 | 노트북 | 내용 |
 |---|---|
+| `colab/compare_colab.ipynb` | 드라이브의 여러 버전 PLY 를 같은 카메라·각도(정면·좌우·천장·바닥·경로 밖)에서 렌더링해 비교 이미지로 저장 (`3_학습결과/비교이미지`) |
 | `colab/gs2d_colab.ipynb` | 2DGS(공식 구현 `hbb1/2d-gaussian-splatting`) 학습 → 3DGS 형식 PLY 변환. 데이터 위치는 1번 셀의 `DRIVE_DATA` 하나만 지정 |
 | `colab/difix_colab.ipynb` | gsplat(MCMC, 300만 상한) 기본 학습 → NVIDIA Difix 보정 학습 (+ 배경 무작위화 선택). 데이터 위치는 1번 셀의 `DRIVE_DATA`. T4 기준 약 4~5시간, 끊기면 이어서 함 |
 
