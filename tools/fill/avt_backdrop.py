@@ -211,11 +211,12 @@ for i in range(1, 7):
         r = fit_face(S, keep, 'y', c0, -1, [q for q in rects if q[1] > q[0] and q[3] > q[2]], 0.7)
         if r is None: print(f'  [{i}] 천장 {c0}: 보이는 천장 부족'); continue
         surf, face, n = r
-        for k in ks: ceil_fit[k] = c0 - face
+        for k in ks: ceil_fit[k] = c0 - face; spaces[k]['_bake_ceiling'] = surf - face
         print(f'  [{i}] 천장 {c0} -> {c0 - face:.2f} (보이는 천장 중앙 {c0 - surf:.2f}, {n}칸)')
     del S
 
 for (k, side), (surf, face) in fits.items():
+    spaces[k]['_bake_' + side] = surf - face
     ax, key, sg = SIDES[side]
     spaces[k][key] = orig[k][key] + sg * face
     spaces[k]['_surf_' + side] = orig[k][key] + sg * surf
@@ -310,8 +311,11 @@ def bake_all():
             W_ = int(np.ceil((u1 - u0) / TEX)) + 1; H_ = int(np.ceil((v1 - v0) / TEX)) + 1
             C = np.zeros((H_, W_, 3)); A = np.zeros((H_, W_))
             for (_, pv, a0_, a1_, b0_, b1_, sg) in qs:
-                # 면 앞 0.9m 까지를 안쪽에서 바라본 모습 그대로 (앞의 것이 뒤를 가림)
-                _, c, T = view(S, pl, pv, sg, (u0, u1, v0, v1), -0.03, 0.9, TEX, color=True)
+                # 면 앞에서 '벽 표면 층'까지만 (표면 중앙 + 15cm). 그 앞의 배관/물건까지 벽에 그려 넣으면
+                # 비스듬히 볼 때 스플랫과 어긋나 얼룩처럼 보임
+                part = key.split('|')[1]
+                dmax = min(0.9, max(0.15, s.get('_bake_' + part, 0.15) + 0.15))
+                _, c, T = view(S, pl, pv, sg, (u0, u1, v0, v1), -0.03, dmax, TEX, color=True)
                 use = (1 - T) > A
                 C[use] = c[use]; A[use] = (1 - T)[use]
             # 덮인 정도로 나눠 원래 밝기로, 덜 덮인 곳은 주변 색으로 채움
@@ -365,8 +369,15 @@ for i in range(1, 7):
     own = np.zeros(len(a), bool)
     for s in spaces:
         if s['owner'] == i: own |= inside(P, s, MARGIN)
-    for s in orig:   # 다른 공간은 원래 상자 기준 (다시 맞춘 상자끼리는 엇갈려 겹칠 수 있음)
-        if s['owner'] != i: own &= ~inside(P, s, -0.05)
+    # 다른 공간 = 원래 상자와 다시 맞춘 상자를 합친 범위. 면을 바깥으로 민 만큼 그 사이에 남은
+    # 다른 스캔 스플랫이 이 공간 안에서 보이면(벽 비침/게시판 겹침) 안 되므로 그 사이도 지움.
+    # 이 스캔의 진짜 벽이 거기 걸려 지워져도, 그 자리 배경 면에 벽 모습이 구워져 있음
+    for k, s in enumerate(spaces):
+        if s['owner'] == i: continue
+        o = orig[k]
+        u = dict(x0=min(s['x0'], o['x0']), x1=max(s['x1'], o['x1']), z0=min(s['z0'], o['z0']),
+                 z1=max(s['z1'], o['z1']), ceil=max(s['ceil'], o['ceil']))
+        own &= ~inside(P, u, -0.01)
     parts.append(a[own]); total += own.sum()
     print(f'  [{i}] {len(a):,} -> {own.sum():,} ({own.mean()*100:.0f}%)')
     # 공간별 PLY (나중에 공간별로 켜고 끄기용)
