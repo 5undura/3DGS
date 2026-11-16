@@ -31,7 +31,7 @@ CORR_CEIL, FULL = 3.02, 99.0
 BEHIND = 0.03        # 면을 벽 표면보다 이만큼 바깥에
 MARGIN = 0.30        # 자르기: 자기 상자 밖으로 남기는 폭
 INWARD = 0.10       # 면을 공간 안쪽으로는 최대 이만큼만 (실제 벽을 가리지 않게)
-TEX = 0.02           # 텍스처 1픽셀 = 2cm
+TEX = 0.015          # 텍스처 1픽셀 = 1.5cm
 
 # ---------------------------------------------------------------- kSpaces 읽기
 src = open(CS, encoding='utf-8-sig').read().replace('\r\n', '\n')
@@ -67,64 +67,111 @@ def load(i):
         n = int(re.search(rb'element vertex (\d+)', h).group(1))
         return np.fromfile(f, DT, n)
 
-def surf_points(a):
-    """벽 맞추기용: 불투명하고 작은 스플랫 중심"""
-    o = 1 / (1 + np.exp(-a['opacity']))
-    s = np.exp(np.maximum(np.maximum(a['scale_0'], a['scale_1']), a['scale_2']))
-    m = (o > 0.3) & (s < 0.15)
-    return np.stack([a['x'], a['y'], a['z']], 1)[m].astype(np.float64)
-
 SIDES = {  # side: (축, 상자 키, 안쪽 방향 부호)
     'N': (0, 'x0', +1), 'S': (0, 'x1', -1), 'W': (2, 'z0', +1), 'E': (2, 'z1', -1)}
+SH0 = 0.28209479177387814
 
-def side_band(s, side, P, depth=0.6):
-    """그 면 근처 점의 (안쪽 거리 +면 안쪽, 벽 방향 위치). 문 구간/모서리 0.3m 는 뺌."""
-    ax, key, sg = SIDES[side]
-    p = s[key]; along = 2 if ax == 0 else 0
-    a0, a1 = (s['z0'], s['z1']) if ax == 0 else (s['x0'], s['x1'])
-    top = min(2.0, s['ceil'] - 0.3)
-    rec = [r for r in s['recess'] if r[0] == side]
-    if rec: top = min(top, rec[0][1] - 0.1)
-    m = (P[:, along] > a0 + 0.3) & (P[:, along] < a1 - 0.3) & (P[:, 1] > 0.3) & (P[:, 1] < top)
-    for c, oa, ob, ot in s['open']:
-        if c == side and ot > 0.5:
-            m &= ~((P[:, along] > oa - 0.15) & (P[:, along] < ob + 0.15))
-    d = (P[:, ax] - p) * sg
-    m &= (d > -depth) & (d < depth)
-    return d[m], np.stack([P[m, along], P[m, 1]], 1)
+def quat_mat(q):
+    q = q / np.linalg.norm(q, axis=1, keepdims=True)
+    w, x, y, z = q.T
+    return np.stack([np.stack([1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)], -1),
+                     np.stack([2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)], -1),
+                     np.stack([2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)], -1)], 1)
 
-def surface(d, pos, cell=0.5, lim=0.35):
-    """안쪽 거리 d 의 층들 중, 면 전체에 넓게 퍼진(=진짜 벽/천장) 층 가운데 가장 바깥쪽.
-    pos: 각 점의 면 위 위치(2D) - 층이 얼마나 넓게 덮는지 재는 데 씀. -> (표면, 면) 또는 None"""
-    if len(d) < 150: return None
-    e = np.arange(-0.6, 0.6001, 0.01)
-    h, _ = np.histogram(d, bins=e)
-    hs = np.convolve(h, np.ones(5) / 5, 'same')
-    peaks = [k for k in range(1, len(hs) - 1) if hs[k] >= 0.08 * hs.max() and hs[k] >= hs[k - 1] and hs[k] >= hs[k + 1]]
-    cells = np.unique(np.floor(pos / cell).astype(int), axis=0)
-    def coverage(c):
-        q = pos[np.abs(d - c) < 0.06]
-        if len(q) == 0: return 0.0
-        u, n = np.unique(np.floor(q / cell).astype(int), axis=0, return_counts=True)
-        return (n >= 3).sum() / len(cells)
-    cand = [((e[k] + e[k + 1]) / 2, coverage((e[k] + e[k + 1]) / 2)) for k in peaks]
-    best = max(c for _, c in cand)
-    c = min(cc for cc, cov in cand if cov >= 0.45 * best)     # 넓게 덮는 층 중 가장 바깥
-    near = d[np.abs(d - c) < 0.08]
-    surf = np.percentile(near, 10)
-    return surf, float(np.clip(surf - BEHIND, -lim, INWARD))
+def splats(i):
+    """스캔 i 의 스플랫: 위치, 색, 불투명도, 회전행렬, 크기^2 (불투명도 0.05 이상)"""
+    a = load(i)
+    o = 1 / (1 + np.exp(-a['opacity'])); m = o > 0.05
+    S = dict(P=np.stack([a['x'], a['y'], a['z']], 1)[m].astype(np.float64),
+             col=np.clip(0.5 + SH0 * np.stack([a['f_dc_0'], a['f_dc_1'], a['f_dc_2']], 1)[m], 0, 1),
+             alpha=o[m],
+             R=quat_mat(np.stack([a['rot_0'], a['rot_1'], a['rot_2'], a['rot_3']], 1)[m].astype(np.float64)),
+             S2=np.exp(2 * np.stack([a['scale_0'], a['scale_1'], a['scale_2']], 1)[m].astype(np.float64)))
+    return S
+
+def raster(U, V, cov, alpha, k, K, u0, v0, res, W_, H_, col=None):
+    """스플랫을 평면에 정사영으로 찍음(가우시안 모양 그대로), 깊이 층(k)별로 모음.
+    -> 덮음(K,H,W) [, 색 합(K,H,W,3)]"""
+    cv_ = np.zeros((K, H_, W_)); acc = np.zeros((K, H_, W_, 3)) if col is not None else None
+    a, b, c = cov[:, 0, 0] + (res / 2) ** 2, cov[:, 0, 1], cov[:, 1, 1] + (res / 2) ** 2
+    det = a * c - b * b
+    ia, ib, ic = c / det, -b / det, a / det
+    r = np.clip(np.ceil(3 * np.sqrt(np.maximum(a, c)) / res).astype(int), 1, 30)
+    cu = (U - u0) / res; cv = (V - v0) / res
+    for R_ in np.unique(r):
+        m = np.nonzero(r == R_)[0]
+        o = np.arange(-R_, R_ + 1); du, dv = np.meshgrid(o, o); du = du.ravel(); dv = dv.ravel()
+        step = max(1, 300000 // len(du))
+        for s0 in range(0, len(m), step):
+            idx = m[s0:s0 + step]
+            iu = np.floor(cu[idx])[:, None] + du; iv = np.floor(cv[idx])[:, None] + dv
+            x = (iu + 0.5 - cu[idx][:, None]) * res; y = (iv + 0.5 - cv[idx][:, None]) * res
+            g = alpha[idx][:, None] * np.exp(-0.5 * (ia[idx][:, None] * x * x + 2 * ib[idx][:, None] * x * y + ic[idx][:, None] * y * y))
+            ok = (iu >= 0) & (iu < W_) & (iv >= 0) & (iv < H_) & (g > 2e-3)
+            kk = np.broadcast_to(k[idx][:, None], ok.shape)[ok]
+            iu = iu[ok].astype(int); iv = iv[ok].astype(int); g = g[ok]
+            np.add.at(cv_, (kk, iv, iu), g)
+            if col is not None:
+                cc = np.broadcast_to(col[idx][:, None, :], ok.shape + (3,))[ok]
+                for ch in range(3): np.add.at(acc[..., ch], (kk, iv, iu), g * cc[:, ch])
+    return cv_, acc
+
+AX = {'y': (0, 2, 1), 'x': (2, 1, 0), 'z': (0, 1, 2)}   # 평면 종류 -> (u 축, v 축, 법선 축)
+PLANE = {'N': 'x', 'S': 'x', 'W': 'z', 'E': 'z'}
+
+def view(S, pl, pv, sg, rect, dmin, dmax, res, step=0.02, color=False, keep=None):
+    """평면(pl=pv) 을 안쪽(+sg)에서 바깥쪽으로 바라본 정사영 '사진'.
+    rect=(u0,u1,v0,v1). 안쪽 거리 d 가 dmax..dmin 인 스플랫을 앞에서부터 겹쳐 그림.
+    -> 처음 불투명(투과<0.5)해지는 거리 맵, [색, 투과율]"""
+    ua, va, na = AX[pl]; u0, u1, v0, v1 = rect
+    P = S['P']; d = (P[:, na] - pv) * sg
+    m = (d > dmin) & (d < dmax) & (P[:, ua] > u0 - 0.3) & (P[:, ua] < u1 + 0.3) & (P[:, va] > v0 - 0.3) & (P[:, va] < v1 + 0.3)
+    if keep is not None: m &= keep
+    W_ = int(np.ceil((u1 - u0) / res)) + 1; H_ = int(np.ceil((v1 - v0) / res)) + 1
+    K = int(np.ceil((dmax - dmin) / step))
+    k = np.clip(((dmax - d[m]) / step).astype(int), 0, K - 1)        # 0 = 가장 안쪽(앞)
+    Rk = S['R'][m][:, [ua, va], :]
+    cov = np.einsum('nik,nk,njk->nij', Rk, S['S2'][m], Rk)
+    cv_, acc = raster(P[m, ua], P[m, va], cov, S['alpha'][m], k, K, u0, v0, res, W_, H_, S['col'][m] if color else None)
+    T = np.ones((H_, W_)); depth = np.full((H_, W_), np.nan); C = np.zeros((H_, W_, 3))
+    for kk in range(K):
+        al = 1 - np.exp(-cv_[kk])
+        if color:
+            c = acc[kk] / np.maximum(cv_[kk], 1e-9)[..., None]
+            C += (T * al)[..., None] * c
+        T = T * (1 - al)
+        hit = np.isnan(depth) & (T < 0.5)
+        depth[hit] = dmax - (kk + 0.5) * step
+    return depth, C, T
 
 # ---------------------------------------------------------------- 면 다시 맞추기
-fits = {}  # (space idx, side) -> (표면 거리, 면 거리)
+# 각 면 자리에서 공간 안쪽 -> 바깥쪽으로 바라본 정사영 '사진'을 찍어, 칸마다 처음 불투명해지는 깊이(= 사람이 보는
+# 벽 표면)를 구함. 면은 그 깊이들의 97% 보다 뒤(바깥)에 둠 -> 보이는 벽을 가리지 않음. 벽 뒤에 숨은 부스러기는 무시됨.
+DRES = 0.05
+fits = {}  # (space idx, side) -> (표면 거리(중앙값), 면 거리)
 ceil_fit = {}
-for i in range(1, 7):
-    a = load(i); P = surf_points(a); del a
-    # 다른 공간 상자 안의 점(문 너머로 보인 것, 떠다니는 것)은 어차피 잘려 나가니 맞추기에서도 뺌
+def deep_in_others(P, i, g=0.3):
+    m = np.zeros(len(P), bool)
     for s in orig:
         if s['owner'] != i:
-            P = P[~((P[:, 0] > s['x0'] + 0.02) & (P[:, 0] < s['x1'] - 0.02) & (P[:, 2] > s['z0'] + 0.02) & (P[:, 2] < s['z1'] - 0.02))]
+            m |= (P[:, 0] > s['x0'] + g) & (P[:, 0] < s['x1'] - g) & (P[:, 2] > s['z0'] + g) & (P[:, 2] < s['z1'] - g)
+    return m
+
+def fit_face(S, keep, pl, pv, sg, rects, lim, mask_fn=None):
+    ds = []
+    for rect in rects:
+        dep, _, _ = view(S, pl, pv, sg, rect, -0.6, 0.8, DRES, keep=keep)
+        if mask_fn is not None: dep = np.where(mask_fn(rect, dep.shape), dep, np.nan)
+        ds.append(dep[np.isfinite(dep)])
+    d = np.concatenate(ds) if ds else np.zeros(0)
+    if len(d) < 40: return None
+    face = np.percentile(d, 3) - BEHIND
+    return float(np.median(d)), float(np.clip(face, -lim, INWARD)), len(d)
+
+for i in range(1, 7):
+    S = splats(i)
+    keep = ~deep_in_others(S['P'], i)      # 문 너머로 보인 다른 공간 (30cm 넘게 안쪽) 은 뺌
     mine = [k for k, s in enumerate(spaces) if s['owner'] == i]
-    # 같은 스캔, 같은 평면의 면끼리 묶어서 함께 맞춤 (복도 조각들이 한 벽을 나눠 가짐)
     groups = {}
     for k in mine:
         s = spaces[k]
@@ -134,32 +181,39 @@ for i in range(1, 7):
             if full: continue
             groups.setdefault((side, round(s[SIDES[side][1]], 2)), []).append(k)
     for (side, p), ks in groups.items():
-        bands = [side_band(spaces[k], side, P) for k in ks]
-        d = np.concatenate([b[0] for b in bands]); pos = np.concatenate([b[1] for b in bands])
-        r = surface(d, pos)
+        ax, key, sg = SIDES[side]
+        rects = []
+        for k in ks:
+            s = spaces[k]
+            a0, a1 = (s['z0'], s['z1']) if ax == 0 else (s['x0'], s['x1'])
+            top = min(2.2, s['ceil'] - 0.3)
+            rec = [r for r in s['recess'] if r[0] == side]
+            if rec: top = min(top, rec[0][1] - 0.1)
+            cuts = [a0 + 0.3]
+            segs = []
+            ops = sorted([(oa - 0.15, ob + 0.15) for c, oa, ob, ot in s['open'] if c == side and ot > 0.5])
+            cur = a0 + 0.3
+            for oa, ob in ops:
+                if oa > cur: segs.append((cur, min(oa, a1 - 0.3)))
+                cur = max(cur, ob)
+            if cur < a1 - 0.3: segs.append((cur, a1 - 0.3))
+            rects += [(u, w, 0.3, top) for u, w in segs if w - u > 0.2]
+        r = fit_face(S, keep, PLANE[side], p, sg, rects, 0.6) if rects else None
         if r is None:
-            print(f'  [{i}] {side} {p}: 점 부족({len(d)}) - 그대로'); continue
-        surf, face = r
+            print(f'  [{i}] {side} {p}: 보이는 벽 부족 - 그대로'); continue
+        surf, face, n = r
         for k in ks: fits[(k, side)] = (surf, face)
-        print(f'  [{i}] {",".join(spaces[k]["name"] for k in ks)} {side}: 면 이동 {face*100:+.1f}cm (점 {len(d)})')
-    # 천장: 같은 스캔, 같은 높이끼리
+        print(f'  [{i}] {",".join(spaces[k]["name"] for k in ks)} {side}: 면 {face*100:+.1f}cm (보이는 표면 중앙 {surf*100:+.1f}cm, {n}칸)')
     cg = {}
     for k in mine: cg.setdefault(round(spaces[k]['ceil'], 2), []).append(k)
     for c0, ks in cg.items():
-        ys = []; xz = []
-        for k in ks:
-            s = spaces[k]
-            m = (P[:, 0] > s['x0'] + 0.3) & (P[:, 0] < s['x1'] - 0.3) & (P[:, 2] > s['z0'] + 0.3) & (P[:, 2] < s['z1'] - 0.3)
-            ys.append(P[m, 1]); xz.append(P[m][:, [0, 2]])
-        y = np.concatenate(ys); xz = np.concatenate(xz)
-        d = c0 - y                                   # 천장에서 아래로 거리 (+ = 안쪽)
-        m = (d > -0.6) & (d < 0.6)
-        r = surface(d[m], xz[m], cell=1.0, lim=0.6)
-        if r is None: print(f'  [{i}] 천장 {c0}: 점 부족'); continue
-        surf, face = r
+        rects = [(spaces[k]['x0'] + 0.3, spaces[k]['x1'] - 0.3, spaces[k]['z0'] + 0.3, spaces[k]['z1'] - 0.3) for k in ks]
+        r = fit_face(S, keep, 'y', c0, -1, [q for q in rects if q[1] > q[0] and q[3] > q[2]], 0.7)
+        if r is None: print(f'  [{i}] 천장 {c0}: 보이는 천장 부족'); continue
+        surf, face, n = r
         for k in ks: ceil_fit[k] = c0 - face
-        print(f'  [{i}] 천장 {c0} -> {c0 - face:.2f} ({",".join(spaces[k]["name"] for k in ks)})')
-    del P
+        print(f'  [{i}] 천장 {c0} -> {c0 - face:.2f} (보이는 천장 중앙 {c0 - surf:.2f}, {n}칸)')
+    del S
 
 for (k, side), (surf, face) in fits.items():
     ax, key, sg = SIDES[side]
@@ -183,11 +237,9 @@ for k, s in enumerate(spaces):
             if hi - lo < 0.3: continue
             # s 의 면은 sg 방향(안쪽)의 반대쪽 = 바깥, s2 는 반대. 엇갈림 = s 의 면이 s2 의 면보다 s2 쪽으로 더 나감
             if (s[key] - s2[key2]) * sg < 0:
-                # 다른 스캔: 두 벽 표면의 가운데 (팀원 배경과 같은 규칙) / 같은 스캔: 두 면의 가운데
-                mid = (s['_surf_' + side] + s2['_surf_' + OPP[side]]) / 2 if s2['owner'] != s['owner'] \
-                    else (s[key] + s2[key2]) / 2
-                print(f'  엇갈림 보정: {s["name"]} {side} / {s2["name"]} {OPP[side]} -> {mid:.3f}')
-                s[key] = s2[key2] = mid
+                # 엇갈려도 옮기지 않음: 면을 자기 벽 표면 앞으로 당기면 실제 벽을 가림 (12:59 확인).
+                # 각 면은 한쪽에서만 보이므로 엇갈린 채로 둬도 서로 안 보임.
+                print(f'  엇갈림(그대로 둠): {s["name"]} {side} / {s2["name"]} {OPP[side]}')
 
 # 공간 사이 열린 면의 높이(복도 천장 기준)도 새 천장으로
 for k, s in enumerate(spaces):
@@ -242,7 +294,6 @@ def faces_of(s):
     return F
 
 # ---------------------------------------------------------------- 텍스처 굽기
-SH0 = 0.28209479177387814
 def bake_all():
     allfaces = {}
     for s in spaces:
@@ -250,57 +301,45 @@ def bake_all():
             allfaces[key] = (s, qs)
     out = []
     for i in range(1, 7):
-        a = load(i)
-        o = 1 / (1 + np.exp(-a['opacity']))
-        m = o > 0.15
-        P = np.stack([a['x'], a['y'], a['z']], 1)[m]
-        col = np.clip(0.5 + SH0 * np.stack([a['f_dc_0'], a['f_dc_1'], a['f_dc_2']], 1)[m], 0, 1)
-        w = o[m]
-        del a
+        S = splats(i)
         for key, (s, qs) in allfaces.items():
             if s['owner'] != i: continue
             pl = qs[0][0]
             u0 = min(q[2] for q in qs); u1 = max(q[3] for q in qs)
             v0 = min(q[4] for q in qs); v1 = max(q[5] for q in qs)
-            if pl == 'y':      # 바닥/천장: q=(x,z)
-                U, V, N = P[:, 0], P[:, 2], P[:, 1]
-            elif pl == 'x':    # N/S 벽: q=(z,y)
-                U, V, N = P[:, 2], P[:, 1], P[:, 0]
-            else:              # W/E 벽: q=(x,y)
-                U, V, N = P[:, 0], P[:, 1], P[:, 2]
             W_ = int(np.ceil((u1 - u0) / TEX)) + 1; H_ = int(np.ceil((v1 - v0) / TEX)) + 1
-            acc = np.zeros((H_, W_, 3)); wt = np.zeros((H_, W_))
+            C = np.zeros((H_, W_, 3)); A = np.zeros((H_, W_))
             for (_, pv, a0_, a1_, b0_, b1_, sg) in qs:
-                dist = (N - pv) * sg            # 면 안쪽 거리
-                depth = 0.12 if pl == 'y' else 0.30
-                mm = (dist > -0.05) & (dist < depth) & (U > a0_ - 0.05) & (U < a1_ + 0.05) & (V > b0_ - 0.05) & (V < b1_ + 0.05)
-                iu = np.clip(((U[mm] - u0) / TEX).astype(int), 0, W_ - 1)
-                iv = np.clip(((V[mm] - v0) / TEX).astype(int), 0, H_ - 1)
-                ww = w[mm] * np.exp(-np.maximum(dist[mm], 0) / 0.1)   # 면에 가까운 층을 더 믿음
-                np.add.at(wt, (iv, iu), ww)
-                for c in range(3): np.add.at(acc[..., c], (iv, iu), ww * col[mm, c])
-            img = fill(acc, wt)
+                # 면 앞 0.9m 까지를 안쪽에서 바라본 모습 그대로 (앞의 것이 뒤를 가림)
+                _, c, T = view(S, pl, pv, sg, (u0, u1, v0, v1), -0.03, 0.9, TEX, color=True)
+                use = (1 - T) > A
+                C[use] = c[use]; A[use] = (1 - T)[use]
+            # 덮인 정도로 나눠 원래 밝기로, 덜 덮인 곳은 주변 색으로 채움
+            img = fill(C, A)
             name = re.sub(r'[^A-Za-z0-9]+', '_', key).strip('_')
             Image.fromarray((np.clip(img[::-1], 0, 1) * 255 + 0.5).astype(np.uint8)).save(os.path.join(OUT, 'Baked', name + '.png'))
             out.append(dict(key=key, tex=name, u0=u0, u1=u1, v0=v0, v1=v1))
-        print(f'  [{i}] 굽기 완료')
+        print(f'  [{i}] 굽기 완료', flush=True)
+        del S
     json.dump({'faces': out}, open(os.path.join(OUT, 'Baked', 'faces.json'), 'w'), indent=1)
 
 def blur(x, sig):
     from scipy.ndimage import gaussian_filter
     return gaussian_filter(x, sigma=(sig, sig) + (0,) * (x.ndim - 2), mode='nearest')
 
-def fill(acc, wt):
-    """정규화 가우시안: 점이 있는 곳은 살짝 부드럽게, 빈 곳은 점점 넓은 반경의 평균으로 채움"""
-    if wt.sum() == 0: return np.zeros_like(acc) + 0.35
-    img = np.zeros_like(acc); have = np.zeros(wt.shape, bool)
+def fill(C, A):
+    """C: 미리 곱한 색, A: 덮인 정도(0..1). 잘 덮인 곳은 C/A, 나머지는 점점 넓은 평균으로 채움"""
+    if A.sum() < 1e-6: return np.zeros_like(C) + 0.35
+    img = np.zeros_like(C)
+    have = A > 0.5
+    img[have] = C[have] / A[have][:, None]
     for sig in (1.0, 2.0, 4, 8, 16, 32, 64, 128, 256):
-        a = blur(acc, sig); b = blur(wt, sig)
-        ok = (b > 1e-3 * np.median(wt[wt > 0]) / (sig * sig)) & ~have
+        a = blur(C, sig); b = blur(A, sig)
+        ok = (b > 0.15) & ~have
         img[ok] = a[ok] / b[ok][:, None]
         have |= ok
         if have.all(): break
-    img[~have] = acc.reshape(-1, 3).sum(0) / wt.sum()
+    img[~have] = C.reshape(-1, 3).sum(0) / A.sum()
     return img
 
 bake_all()
@@ -326,8 +365,8 @@ for i in range(1, 7):
     own = np.zeros(len(a), bool)
     for s in spaces:
         if s['owner'] == i: own |= inside(P, s, MARGIN)
-    for s in spaces:
-        if s['owner'] != i: own &= ~inside(P, s, -0.02)
+    for s in orig:   # 다른 공간은 원래 상자 기준 (다시 맞춘 상자끼리는 엇갈려 겹칠 수 있음)
+        if s['owner'] != i: own &= ~inside(P, s, -0.05)
     parts.append(a[own]); total += own.sum()
     print(f'  [{i}] {len(a):,} -> {own.sum():,} ({own.mean()*100:.0f}%)')
     # 공간별 PLY (나중에 공간별로 켜고 끄기용)
