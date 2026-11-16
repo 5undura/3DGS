@@ -36,6 +36,7 @@ CORR_CEIL, FULL = 3.02, 99.0
 BEHIND = 0.02        # 면을 보이는 벽 표면보다 이만큼(+1cm) 뒤에
 MARGIN = 0.30        # 자르기: 자기 공간 밖으로 남기는 폭
 TEX = 0.015          # 텍스처 1픽셀 = 1.5cm
+DOOR_MAX = 2.5       # 이보다 낮은 열린 칸 = 문 (그 위는 공간끼리 크게 트인 곳)
 DRES = 0.05          # 벽 표면 찾기용 해상도
 SH0 = 0.28209479177387814
 PREVIEW = False
@@ -198,6 +199,15 @@ def is_full_open(s, side):
     return any(c == side and ot >= FULL - 1 and oa <= a0 + 0.01 and ob >= a1 - 0.01 for c, oa, ob, ot in s['open'])
 
 
+def open_mask(s, side, u, v, doors=True, pad=0.0):
+    """(u,v) 가 그 면의 열린 곳(공간끼리 통하는 곳 / 문) 안인지"""
+    m = np.zeros(np.shape(u), bool)
+    for c, oa, ob, top in s['open']:
+        if c != side or (not doors and top < FULL - 1): continue
+        m |= (u > oa - pad) & (u < ob + pad) & (v < top + pad)
+    return m
+
+
 def faces_of(s, k, ext=None):
     """key -> [dict(pl, p, u0,u1,v0,v1, sg)] : StudentHallBackdrop.BuildSide 와 같은 구성(문/오목부), 상자 평면 기준.
     ext[side] = 그 면 쪽으로 더 늘릴 길이 (벽이 상자보다 바깥에 있을 때 모서리가 비지 않게)"""
@@ -217,7 +227,7 @@ def faces_of(s, k, ext=None):
         alongZ = ax == 0
         p = s[key]; a0, a1 = (s['z0'], s['z1']) if alongZ else (s['x0'], s['x1'])
         e0, e1 = (a0 - e('W'), a1 + e('E')) if alongZ else (a0 - e('N'), a1 + e('S'))
-        op = [o for o in s['open'] if o[0] == side]
+        op = [o for o in s['open'] if o[0] == side and o[3] >= DOOR_MAX]   # 문은 여기서 안 자름: 실제 뚫린 곳을 데이터로 찾음
         r = next((r for r in s['recess'] if r[0] == side), None)
         sill, q = (r[1], r[2]) if r else (s['ceil'] + 1, p)
         cuts = sorted(set([min(max(c, e0), e1) for o in op for c in (o[1], o[2])] + [e0, e1]))
@@ -294,8 +304,12 @@ def build(src, spaces, out_dir, tag):
                 if is_full_open(s, side): continue
                 ax, key, sg = SIDES[side]
                 a0, a1 = (s['z0'], s['z1']) if ax == 0 else (s['x0'], s['x1'])
-                D, ref = relief(*view(S, PLANE[side], s[key], 0.0, sg, (a0, a1, 0.3, min(2.2, s['ceil'] - 0.3)), -0.8, 0.9, DRES, keep=keep, slabs=True))
-                if D is not None: ext[side] = float(np.clip(-D.min() + 0.05, 0.0, 0.85))
+                top_ = min(2.2, s['ceil'] - 0.3)
+                D, ref = relief(*view(S, PLANE[side], s[key], 0.0, sg, (a0, a1, 0.3, top_), -0.8, 0.9, DRES, keep=keep, slabs=True))
+                if D is not None:
+                    uu = a0 + (np.arange(D.shape[1]) + 0.5) * DRES; vv = 0.3 + (np.arange(D.shape[0]) + 0.5) * DRES
+                    U_, V_ = np.meshgrid(uu, vv); wall = ~open_mask(s, side, U_, V_, pad=0.15)   # 열린 곳 깊이는 벽이 아님
+                    if wall.any(): ext[side] = float(np.clip(-D[wall].min() + 0.05, 0.0, 0.85))
             cD, cref = relief(*view(S, 'y', s['ceil'], 0.0, -1, (s['x0'] + .3, s['x1'] - .3, s['z0'] + .3, s['z1'] - .3), -0.8, 0.9, DRES, keep=keep, slabs=True), ref_pct=25)
             ceil_y = s['ceil'] - (float(cD.min()) if cD is not None else 0.0)      # 천장 면의 가장 높은 곳
             for key, qs in faces_of(s, k, ext).items():
@@ -310,11 +324,62 @@ def build(src, spaces, out_dir, tag):
                     D, ref = relief(dep, al, dks, ref_pct=25 if part == 'ceiling' else 30, bump=0.03 if part == 'floor' else 0.12)
                     if D is None: D = np.zeros(dep.shape) - BEHIND
                     if part == 'floor': D = np.clip(D, -0.10, 0.02)             # 바닥은 거의 평평하게
-                    recs.append(dict(i=i, k=k, key=key, pl=pl, part=part, p=p, sg=sg, u0=u0, u1=u1, v0=v0, v1=v1, D0=D, D=D.copy(),
+                    # 문: kSpaces 의 문 칸 안에서 실제로 뚫려 보이는 곳(안 보이거나 벽 뒤로 35cm 넘게 보이는 곳)만 구멍
+                    hole = None
+                    if part in SIDES and any(o[0] == part and o[3] < DOOR_MAX for o in s['open']):
+                        from scipy.ndimage import binary_opening, binary_closing, label
+                        uu = u0 + (np.arange(dep.shape[1]) + 0.5) * DRES; vv = v0 + (np.arange(dep.shape[0]) + 0.5) * DRES
+                        U_, V_ = np.meshgrid(uu, vv)
+                        door = np.zeros(U_.shape, bool)
+                        for c, oa, ob, top in s['open']:
+                            if c == part and top < DOOR_MAX: door |= (U_ > oa - 0.10) & (U_ < ob + 0.10) & (V_ < top + 0.10)
+                        deep = ~np.isfinite(dep) | (dep < ref - 0.35)
+                        hole = binary_closing(binary_opening(door & deep, np.ones((3, 3))), np.ones((3, 3))) & door
+                        lab, n = label(hole)                                   # 바닥에 닿는 덩어리만 (문은 바닥부터 뚫림)
+                        keepl = [l for l in range(1, n + 1) if V_[lab == l].min() < 0.25]
+                        hole = np.isin(lab, keepl)
+                    recs.append(dict(i=i, k=k, key=key, pl=pl, part=part, p=p, sg=sg, u0=u0, u1=u1, v0=v0, v1=v1, D0=D, D=D.copy(), hole=hole,
                                      main=gi == 0 and part in ('N', 'S', 'W', 'E', 'floor', 'ceiling'),
                                      rects=[(q['u0'], q['u1'], q['v0'], min(q['v1'], v1)) for q in gq if min(q['v1'], v1) - q['v0'] > 0.01]))
             print(f"  [{i}] {s['name']}: 벽 바깥으로 " + ' '.join(f'{sd}{ext[sd]*100:.0f}cm' for sd in ext) + f", 천장 {s['ceil']:.2f}->{ceil_y:.2f}", flush=True)
         del S
+    # ---- 1b) 문 구멍을 반듯한 사각형으로: 문마다 양쪽 면(복도 쪽, 방 쪽)에서 찾은 구멍을 모아 실제 문 폭/높이를 정하고
+    #          두 면 모두 같은 사각형으로 뚫음. 아무 쪽에서도 못 찾으면 kSpaces 의 문 칸 그대로
+    OPP_ = {'N': 'S', 'S': 'N', 'W': 'E', 'E': 'W'}
+    def grid(r):
+        h_, w_ = r['D0'].shape
+        return np.meshgrid(r['u0'] + (np.arange(w_) + 0.5) * DRES, r['v0'] + (np.arange(h_) + 0.5) * DRES)
+    done_doors = set()
+    for r in [x for x in recs if x['hole'] is not None or x['part'] in OPP_]:
+        if not r['main'] or r['part'] not in OPP_: continue
+        sp = spaces[r['k']]
+        for c, oa, ob, top in sp['open']:
+            if c != r['part'] or top >= DOOR_MAX: continue
+            dk = (round(r['p'], 1), round((oa + ob) / 2, 1))
+            if dk in done_doors: continue
+            done_doors.add(dk)
+            mates = [r] + [x for x in recs if x['main'] and x['k'] != r['k'] and x['part'] == OPP_[r['part']]
+                           and abs(x['p'] - r['p']) < 0.3 and x['u0'] < ob and x['u1'] > oa]
+            us, vt = [], []
+            for x in mates:
+                if x['hole'] is None: continue
+                U_, V_ = grid(x)
+                inr = (U_[0] > oa - 0.12) & (U_[0] < ob + 0.12)
+                colf = x['hole'][:, inr].mean(0)
+                if (colf > 0.25).sum() >= 4:
+                    uu = U_[0][inr][colf > 0.25]; us += [uu.min() - DRES / 2, uu.max() + DRES / 2]
+                    vt.append(V_[:, 0][x['hole'][:, inr].any(1)].max() + DRES / 2)
+            a_, b_ = (min(us), max(us)) if us else (oa, ob)
+            t_ = min(max(vt), top + 0.05) if vt else top
+            if t_ < 1.7: t_ = top
+            for x in mates:
+                U_, V_ = grid(x)
+                rect = (U_ > a_) & (U_ < b_) & (V_ < t_)
+                if x['hole'] is None: x['hole'] = np.zeros(x['D0'].shape, bool)
+                near_door = (U_ > oa - 0.3) & (U_ < ob + 0.3)
+                x['hole'] = np.where(near_door, rect, x['hole'])
+            print(f"  문 {sp['name']} {c} {oa:.2f}~{ob:.2f}: 실제 {a_:.2f}~{b_:.2f}, 높이 {t_:.2f}" + ('' if us else ' (못 찾음: 상자 값)'))
+            sp.setdefault('_doors', []).append((c, a_, b_, t_))
     # ---- 2) 마주 보는 두 공간의 벽 면이 서로 엇갈린 곳(스캔끼리 위치가 어긋나 두 공간이 겹친 곳): 두 면을 가운데로.
     #         겹친 부분의 스플랫은 어차피 양쪽 다 잘리므로(서로 상대 공간 안) 면을 당겨도 가리는 것이 없음.
     OPP = {'N': 'S', 'S': 'N', 'W': 'E', 'E': 'W'}
@@ -379,8 +444,13 @@ def build(src, spaces, out_dir, tag):
                     eu = np.zeros(3); eu[ua] = 1; ev = np.zeros(3); ev[va] = 1
                     flip = np.dot(np.cross(eu, ev), n) < 0          # Unity: cross(b-a, c-a) 가 보이는 쪽
                     t = np.stack([a00, a01, a11, a00, a11, a10], 1) if not flip else np.stack([a00, a11, a01, a00, a10, a11], 1)
+                    if r.get('hole') is not None:                          # 문 구멍 칸의 삼각형은 뺌
+                        cu_ = (gu[:-1, :-1] + gu[1:, 1:]).ravel() / 2; cv_ = (gv[:-1, :-1] + gv[1:, 1:]).ravel() / 2
+                        hj = np.clip(((cu_ - u0) / DRES).astype(int), 0, r['hole'].shape[1] - 1)
+                        hi = np.clip(((cv_ - v0) / DRES).astype(int), 0, r['hole'].shape[0] - 1)
+                        t = t[~np.repeat(r['hole'][hi, hj], 1)]
                     TRI += t.ravel().tolist()
-                dbg.append(dict(k=r['k'], key=key, pl=pl, p=p, sg=sg, u0=u0, u1=u1, v0=v0, v1=v1, D=D, rects=r['rects']))
+                dbg.append(dict(k=r['k'], key=key, pl=pl, p=p, sg=sg, u0=u0, u1=u1, v0=v0, v1=v1, D=D, rects=r['rects'], hole=r.get('hole')))
             # 벽 층이 있는 곳은 그 층, 덜 덮인 만큼은 (앞쪽에 보이는 것 -> 그래도 없으면 주변에서 부드럽게 이어 붙인 색)
             under = inpaint(C[..., 3:], A[..., 1])
             img = C[..., :3] + (1 - A[..., :1]) * under
@@ -429,6 +499,7 @@ def inside(P, s, maps, grow):
             r = next((r for r in s['recess'] if r[0] == side), None)
             if r is not None:                                   # 창문 오목부: 창턱 위로는 더 깊음
                 face = np.where(P[:, 1] > r[1], np.minimum(face, (r[2] - s[key]) * sg - 0.3), face)
+            face = np.where(open_mask(s, side, u, P[:, 1]), 0.0, face)    # 열린 곳/문: 경계는 상자 평면
         m &= d > face - grow
     return m
 
@@ -441,18 +512,35 @@ def crop_merge(src, spaces, maps, ply, tag):
         own = np.zeros(len(a), bool)
         for s in spaces:
             if s['owner'] == i: own |= inside(P, s, maps, MARGIN)
+        # 다른 공간 안 = 지움. 중심만 보지 않고, 스플랫이 퍼진 끝(가장 긴 두 축으로 ±2σ)이 다른 공간 안으로 들어가도 지움:
+        # 벽/문틀 근처의 큰 스플랫은 중심이 벽 뒤에 있어도 옆 공간 쪽으로 번져 보임 (방 초록색이 복도 벽에 비치는 것)
+        R = quat_mat(np.stack([a['rot_0'], a['rot_1'], a['rot_2'], a['rot_3']], 1).astype(np.float64))
+        sc = np.exp(np.stack([a['scale_0'], a['scale_1'], a['scale_2']], 1).astype(np.float64))
+        order = np.argsort(-sc, 1)
+        tips = [P]
+        for r in range(2):
+            ax_ = order[:, r]
+            v = R[np.arange(len(a)), :, ax_] * (2 * sc[np.arange(len(a)), ax_])[:, None]
+            tips += [P + v, P - v]
         for s in spaces:
-            if s['owner'] != i: own &= ~inside(P, s, maps, 0.0)
+            if s['owner'] != i:
+                for T in tips: own &= ~inside(T, s, maps, 0.0)
+        del R
         # 문(방-복도 사이 출입구): 문틀 평면 너머(상대 공간 쪽)에 있는 이 스캔의 스플랫은 지움. 문 너머로 멀리 찍힌 것이라
         # 흐릿한 덩어리(부유물)가 되어 문을 지날 때 화면을 가림. 그쪽은 상대 스캔이 가까이서 찍은 것으로 보임
         for s in spaces:
             if s['owner'] != i: continue
             for side, oa, ob, top in s['open']:
-                if top >= FULL - 1: continue
+                if top >= DOOR_MAX: continue
                 ax, key, sg = SIDES[side]
                 u = P[:, 2] if ax == 0 else P[:, 0]
                 d = (P[:, ax] - s[key]) * sg
-                own &= ~((u > oa - 0.10) & (u < ob + 0.10) & (P[:, 1] < top + 0.10) & (d < 0) & (d > -0.9))
+                ps = (u > oa - 0.10) & (u < ob + 0.10) & (P[:, 1] < top + 0.10) & (d > -0.9) & (d < 0.9)
+                own &= ~(ps & (d < 0))
+                # 문 칸 안의 스플랫이 문틀 밖(옆 벽/문 위)으로 번지면 벽 위에 얼룩으로 보임 -> 지움
+                for T in tips[1:]:
+                    tu = T[:, 2] if ax == 0 else T[:, 0]
+                    own &= ~(ps & ((tu < oa - 0.06) | (tu > ob + 0.06) | (T[:, 1] > top + 0.06)))
         parts.append(a[own])
         print(f'  [{i}] {len(a):,} -> {own.sum():,} ({own.mean()*100:.0f}%)')
     m = np.concatenate(parts)
