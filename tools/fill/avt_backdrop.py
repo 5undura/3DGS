@@ -443,6 +443,16 @@ def crop_merge(src, spaces, maps, ply, tag):
             if s['owner'] == i: own |= inside(P, s, maps, MARGIN)
         for s in spaces:
             if s['owner'] != i: own &= ~inside(P, s, maps, 0.0)
+        # 문(방-복도 사이 출입구): 문틀 평면 너머(상대 공간 쪽)에 있는 이 스캔의 스플랫은 지움. 문 너머로 멀리 찍힌 것이라
+        # 흐릿한 덩어리(부유물)가 되어 문을 지날 때 화면을 가림. 그쪽은 상대 스캔이 가까이서 찍은 것으로 보임
+        for s in spaces:
+            if s['owner'] != i: continue
+            for side, oa, ob, top in s['open']:
+                if top >= FULL - 1: continue
+                ax, key, sg = SIDES[side]
+                u = P[:, 2] if ax == 0 else P[:, 0]
+                d = (P[:, ax] - s[key]) * sg
+                own &= ~((u > oa - 0.10) & (u < ob + 0.10) & (P[:, 1] < top + 0.10) & (d < 0) & (d > -0.9))
         parts.append(a[own])
         print(f'  [{i}] {len(a):,} -> {own.sum():,} ({own.mean()*100:.0f}%)')
     m = np.concatenate(parts)
