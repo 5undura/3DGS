@@ -53,8 +53,11 @@ def main():
     def save(frame, i):
         nonlocal saved
         saved += 1
-        cv2.imwrite(os.path.join(a.out_dir, f"f_{saved:05d}_{i:06d}.jpg"),
-                    frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        # cv2.imwrite 는 Windows 에서 한글 경로면 저장 안 하고 조용히 실패 -> imencode + tofile
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if not ok:
+            raise SystemExit(f"JPEG encode failed at frame {i}")
+        buf.tofile(os.path.join(a.out_dir, f"f_{saved:05d}_{i:06d}.jpg"))
 
     while True:
         ok, frame = cap.read()
