@@ -24,6 +24,7 @@ night_log.txt
 [0-9]a_skip/
 [0-9]b/
 [0-9]c/
+[0-9]c_*/
 
 # 기타
 __pycache__/

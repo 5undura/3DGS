@@ -4,8 +4,9 @@
 영상·프레임·PLY 같은 데이터는 저장소에 올리지 않고 클라우드(구글 드라이브 `3DGS` 폴더)에 보관함.
 
 ## 준비물
-- **COLMAP (CUDA 빌드)** — Windows용 `colmap-x64-windows-cuda`. CUDA 없는 빌드는 정합이 몇 배 느림
-- **Brush** — `brush_app.exe`
+- **COLMAP 4.x (CUDA 빌드)** — https://github.com/colmap/colmap/releases 의 Windows CUDA 빌드. CUDA 없는 빌드는 정합이 몇 배 느림
+- **LichtFeld Studio** — 소스 빌드 (`3_train/LICHTFELD_SETUP.md`), 또는 Brush
+- **Brush** — `brush_app.exe` (기존 방식)
 - **Python 3** + `pip install opencv-python numpy`
 
 ## 처음 설정
@@ -29,6 +30,17 @@ PowerShell에서 스크립트 실행이 막히면 한 번만: `Set-ExecutionPoli
 | `night_log.txt` | 전체 진행 기록 (구간별 프레임 수, 정합 시간, 모델별 등록 장수) |
 
 구간은 영상을 나눠 찍은 단위. 똑같이 생긴 방끼리 섞여서 정합이 꼬이는 걸 막으려고 나눠서 처리함.
+
+## 한 번에 실행 (2026-11 개정)
+1. `config.example.ps1` → `config.ps1` 복사, 경로·`$Sections`·`$Trainer`·`$GpuProfile` 수정
+2. **`run_all.bat` 더블클릭** → 프레임 추출 → 정합 → 학습까지 자동. 끝난 구간·단계는 건너뜀
+3. 결과: `Nc_lichtfeld` (또는 `Nc_brush`) 폴더의 PLY, 진행 기록은 `night_log.txt`
+
+바뀐 점
+- 정합: COLMAP 4.x **sequential + 루프 매칭**, **전역 정합(GLOMAP, `global_mapper`)** — 프레임 솎아내기 불필요. 실패하면 자동으로 기존 incremental `mapper`
+- 학습: **LichtFeld Studio** (MCMC + 노출 보정 PPISP + 배경 변조). 설치는 [3_train/LICHTFELD_SETUP.md](3_train/LICHTFELD_SETUP.md). `$Trainer = "brush"`로 기존 Brush 도 가능
+- 왜 이렇게 바꿨는지·비교 방법·함정: [3_train/PIPELINE_UPGRADE.md](3_train/PIPELINE_UPGRADE.md)
+- 그래픽카드 프로필: `3060ti`(8GB, 1920px, 150만) / `5070`(12GB, 2560px, 200만) — `3_train/train_all.ps1` 에서 조정
 
 ## 실행 순서
 ```powershell
