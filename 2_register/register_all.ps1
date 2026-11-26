@@ -8,6 +8,7 @@
 . "$PSScriptRoot\..\config.ps1"
 if (-not $Mapper) { $Mapper = "incremental" }
 if (-not $MatcherArgs) { $MatcherArgs = @() }
+if (-not $FeatureArgs) { $FeatureArgs = @() }
 
 New-Item -ItemType Directory -Force $Work | Out-Null
 $log = Join-Path $Work "night_log.txt"
@@ -33,7 +34,7 @@ foreach ($n in $Sections) {
     if (-not (Test-Path -LiteralPath $img)) { Write-Host "[$n] 프레임 폴더 없음: $img (건너뜀)"; continue }
 
     try {
-        Log "[$n] 정합 시작 $(Get-Date) / 매칭 $Matcher / 정합 $Mapper"
+        Log "[$n] 정합 시작 $(Get-Date) / 매칭 $Matcher / 정합 $Mapper / 특징점 옵션 $($FeatureArgs -join ' ') / 매칭 옵션 $($MatcherArgs -join ' ')"
 
         # 프레임이 너무 많으면 일정 간격으로 솎아냄 (빠진 사진은 Na_skip 으로 옮김, 삭제 안 함)
         $files = @(Get-ChildItem -LiteralPath $img -Filter *.jpg | Sort-Object Name)
@@ -70,8 +71,9 @@ foreach ($n in $Sections) {
 
         if (-not (Test-Path -LiteralPath $matchDone)) {
             # 같은 카메라로 찍은 영상이라 카메라 1개, 렌즈 왜곡 포함 모델(OPENCV)
-            Run-Colmap @("feature_extractor", "--database_path", $db, "--image_path", $img,
-                         "--ImageReader.single_camera", "1", "--ImageReader.camera_model", "OPENCV")
+            $fargs = @("feature_extractor", "--database_path", $db, "--image_path", $img,
+                       "--ImageReader.single_camera", "1", "--ImageReader.camera_model", "OPENCV") + $FeatureArgs
+            Run-Colmap $fargs
             $margs = @("${Matcher}_matcher", "--database_path", $db)
             if ($Matcher -eq "sequential") { $margs += $MatcherArgs }
             Run-Colmap $margs

@@ -14,6 +14,9 @@ Options:
     --max-gap S      if nothing was kept for S seconds, force-keep the sharpest
                      frame of that stretch so there are no holes (default 1.0)
     --min-gap N      never keep two frames closer than N frames apart (default 3)
+    --sharp-res PX   long side (px) at which sharpness is measured (default 960). 960 hides
+                     motion blur of a few 4K pixels; 1920 or 0 (= original size) is stricter
+                     but slower. tools/diagnose.py --frames shows whether this matters.
     --abs-floor-pct P  absolute sharpness floor: drop frames below the P-th percentile
                      of the sharpness of the WHOLE video (default 0 = off). The
                      --max-gap forced keep is also skipped below the floor, so long
@@ -30,13 +33,24 @@ import cv2
 import numpy as np
 
 
+SHARP_RES = 960
+
+
 def sharpness(frame):
-    """(Laplacian variance at 960 px long side, gray image) - same measure in both passes"""
+    """(Laplacian variance at SHARP_RES long side, gray image at 960 px) - same measure in both passes"""
     h, w = frame.shape[:2]
     s = 960.0 / max(h, w)
     gray = cv2.cvtColor(cv2.resize(frame, (int(w * s), int(h * s)),
                                    interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
-    return cv2.Laplacian(gray, cv2.CV_64F).var(), gray
+    if SHARP_RES == 960:
+        return cv2.Laplacian(gray, cv2.CV_64F).var(), gray
+    if SHARP_RES <= 0 or SHARP_RES >= max(h, w):
+        g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    else:
+        r = SHARP_RES / max(h, w)
+        g = cv2.cvtColor(cv2.resize(frame, (int(w * r), int(h * r)), interpolation=cv2.INTER_AREA),
+                         cv2.COLOR_BGR2GRAY)
+    return cv2.Laplacian(g, cv2.CV_64F).var(), gray
 
 
 def tc(i, fps):
@@ -77,7 +91,10 @@ def main():
     ap.add_argument("--max-gap", type=float, default=1.0)
     ap.add_argument("--min-gap", type=int, default=3)
     ap.add_argument("--abs-floor-pct", type=float, default=0.0)
+    ap.add_argument("--sharp-res", type=int, default=960)
     a = ap.parse_args()
+    global SHARP_RES
+    SHARP_RES = a.sharp_res
     if not 0 <= a.abs_floor_pct < 100:
         raise SystemExit("--abs-floor-pct must be in [0, 100)")
     os.makedirs(a.out_dir, exist_ok=True)

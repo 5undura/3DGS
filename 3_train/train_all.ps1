@@ -7,6 +7,7 @@ if (-not $Trainer) { $Trainer = "lichtfeld" }
 if (-not $GpuProfile) { $GpuProfile = "3060ti" }
 if (-not $Iterations) { $Iterations = 30000 }
 if (-not $ShDegree) { $ShDegree = 2 }
+if (-not $TrainExtraArgs) { $TrainExtraArgs = @() }
 
 # 그래픽카드별 학습 해상도(긴 변)·스플랫 상한. 메모리가 부족하면 여기서 낮춤
 $profiles = @{
@@ -28,7 +29,7 @@ foreach ($n in $Sections) {
         Write-Host "[$n] 이미 학습됨 (건너뜀)"; continue
     }
     New-Item -ItemType Directory -Force $out | Out-Null
-    Log "[$n] 학습 시작 $(Get-Date) / $Trainer / $GpuProfile (폭 $($p.Width), 상한 $($p.Cap))"
+    Log "[$n] 학습 시작 $(Get-Date) / $Trainer / $GpuProfile (폭 $($p.Width), 상한 $($p.Cap)) / 추가 옵션 $($TrainExtraArgs -join ' ')"
 
     if ($Trainer -eq "lichtfeld") {
         # MCMC(개수 상한 직접 제어) + PPISP(사진마다 다른 노출·WB 보정) + 배경 변조(어두운 곳이 투명하게 남지 않게)
@@ -38,13 +39,14 @@ foreach ($n in $Sections) {
                   "--sh-degree=$ShDegree", "--max-width=$($p.Width)", "--ppisp", "--bg-modulation",
                   "--eval", "--test-every=8", "--headless")
         if ($p.Tile -gt 1) { $targs += "--tile-mode=$($p.Tile)" }
+        $targs += $TrainExtraArgs
         # | Out-Host: GUI 형식 exe 라도 끝날 때까지 기다리게 함 ($LASTEXITCODE 도 유지)
         & $LichtFeld @targs | Out-Host
     }
     elseif ($Trainer -eq "brush") {
         # (Brush 기본 학습 스텝은 30,000)
         $targs = @($data, "--max-splats", "$($p.Cap)", "--sh-degree", "$ShDegree", "--max-resolution", "$($p.Width)",
-                   "--export-every", "$Iterations", "--export-path", $out)
+                   "--export-every", "$Iterations", "--export-path", $out) + $TrainExtraArgs
         & $Brush @targs | Out-Host
     }
     else { throw "알 수 없는 Trainer: $Trainer (lichtfeld / brush)" }
