@@ -13,6 +13,8 @@ $Brush     = "C:\tools\brush\brush_app.exe"
 
 # 작업 폴더: 촬영 영상 1.MP4, 2.MP4 ... 를 넣어 둔 폴더
 #   결과는 같은 폴더 안에 1a(프레임) / 1b(정합) / 1c_<학습기>(PLY) 로 생김
+#   ⚠️ 새 실험은 항상 "새 폴더"에서: 이미 Na(프레임)·Nb\data(정합)가 있는 구간은 건너뛰므로,
+#      예전 작업 폴더에서 돌리면 아무 것도 새로 안 함. 예: $Work = "F:\Sample\4차\up", 영상은 $VideoDir 로 지정
 $Work = "D:\capture\6"
 # 영상이 $Work 가 아닌 다른 폴더에 있으면 지정 (비워 두면 $Work 에서 찾음)
 $VideoDir = ""
