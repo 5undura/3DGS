@@ -33,7 +33,11 @@
 ## 시행착오
 - LichtFeld `--pose-opt` 비교(1단계)는 설치(VS2022 C++ 워크로드, CUDA 12.8, Strawberry Perl)가 필요해 보류. 규칙상 설치는 먼저 물어봄.
   대안 gsplat `--pose_opt` 도 torch+gsplat 설치가 필요해 보류.
-  → 대신 "자세가 원인인지"를 **재정합 전후 / 순간이동 사진 제외 전후 Brush PSNR** 로 간접 확인
+  - 2026-11-27: 사용자가 Strawberry Perl, CUDA 12.8, VS2022 C++ 설치 중 → 끝나면 확인 후 LICHTFELD_SETUP.md 대로 v0.5.4.3 빌드, pose-opt 비교 진행
+  - 03:50 설치 확인됨 (VS2022 Community + 영어 팩, CUDA 12.8, Strawberry Perl, CMake 3.31.6/Ninja 는 VS 포함).
+    `F:\Sample\tools\lfs\{vcpkg, LichtFeld-Studio(v0.5.4.3)}` 클론, 소스 argument_parser.cpp 에 `--pose-opt` 있음 확인.
+    빌드 스크립트 `F:\Sample\tools\lfs\build_lfs.bat` (CUDA arch 86 = 3060 Ti 전용. 5070 PC 에서 쓰려면 "86;120" 으로 다시 빌드), 로그 `build_log2.txt`. vcpkg 가 의존성을 받아 빌드하느라 오래 걸림
+  → 그동안 "자세가 원인인지"를 **재정합 전후 / 순간이동 사진 제외 전후 Brush PSNR** 로 간접 확인
 
 ## 오늘 밤 계획 (GPU 작업은 하나씩)
 1. diagnose.py 로 원래 1b 의 순간이동 전체 목록 (CPU)
