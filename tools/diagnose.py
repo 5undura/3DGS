@@ -14,6 +14,9 @@
           밝기 변화(자동 노출 흔들림), 가장 흐린 프레임 목록
   모델  : 카메라 모델·초점·왜곡, 등록 장수, 재투영 오차, 트랙 길이, 사진당 3D 점 수(적은 사진 = 흰 벽만 보는 사진),
           촬영 궤적의 높이 변화(한 높이로만 찍었는지), 시선 방향(앞만 봤는지 / 벽을 정면으로 본 사진 비율)
+          + 순간이동 검사: 촬영 순서(파일명의 원본 프레임 번호)대로 이동 속도를 재서, 중앙값보다 훨씬 빠르게
+            튄 사진 = 반복되는 문·복도 때문에 엉뚱한 곳에 정합된 사진 후보 (학습 때 벽을 녹인 것처럼 뭉갬)
+  카메라: --cameras-json  학습기가 남긴 3DGS cameras.json 도 같은 궤적 검사 가능
   PLY   : tools/compare_runs.py 와 같은 표
 """
 import argparse
@@ -93,7 +96,17 @@ def frame_metrics(img):
     # 원본 해상도 선명도는 4등분 타일의 최댓값 (흰 벽 타일 때문에 낮게 나오는 것 방지)
     th, tw = h // 2, w // 2
     tiles = [gray_full[y:y + th, x:x + tw] for y in (0, th) for x in (0, tw)]
-    return dict(sharp960=lap(g960), sharp_full=max(lap(t) for t in tiles),
+    # 실효 해상도: 가운데 정사각형의 방사 파워 스펙트럼이 고주파 잡음 바닥(나이퀴스트 근처)의 3배 아래로
+    # 떨어지는 주파수 -> 그 위로는 디테일이 없음 (압축·노이즈 제거·블러로 사라짐)
+    sq = min(h, w, 2048)
+    c = gray_full[(h - sq) // 2:(h + sq) // 2, (w - sq) // 2:(w + sq) // 2].astype(np.float64)
+    c = (c - c.mean()) * np.hanning(sq)[:, None] * np.hanning(sq)[None, :]
+    P = np.abs(np.fft.fftshift(np.fft.fft2(c))) ** 2
+    yy, xx = np.indices(P.shape)
+    r = np.hypot(yy - sq / 2, xx - sq / 2) / (sq / 2)
+    bands = [P[(r > b) & (r <= b + 0.05)].mean() for b in np.arange(0.05, 1.0, 0.05)]
+    cut = next((0.05 + 0.05 * i for i, b in enumerate(bands) if b < 3 * bands[-1]), 1.0)
+    return dict(sharp960=lap(g960), sharp_full=max(lap(t) for t in tiles), eff=cut,
                 bright=float(np.median(gray_full)),
                 contrast=float(np.percentile(gray_full, 95) - np.percentile(gray_full, 5)),
                 dark=float(np.mean(gray_full < 10) * 100), clip=float(np.mean(gray_full > 250) * 100),
@@ -117,9 +130,10 @@ def report_frames(items, label):
     r960 = a["sharp960"].argsort().argsort() / max(len(m) - 1, 1)
     rful = a["sharp_full"].argsort().argsort() / max(len(m) - 1, 1)
     hidden = np.mean((r960 > 0.5) & (rful < 0.25)) * 100
-    ratio = a["sharp_full"] / np.maximum(a["sharp960"], 1e-9)
-    print(f"  선명도 960px 중앙 {np.median(a['sharp960']):.0f}, 원본 중앙 {np.median(a['sharp_full']):.0f}, "
-          f"원본/960 비 중앙 {np.median(ratio):.3f}")
+    eff = np.median(a["eff"])
+    print(f"  선명도 960px 중앙 {np.median(a['sharp960']):.0f}, 원본 중앙 {np.median(a['sharp_full']):.0f}")
+    print(f"  실효 해상도: 디테일이 나이퀴스트의 {eff:.2f} 까지 -> 가로 약 {int(a['w'][0] * eff)}px 상당 "
+          f"(학습 해상도를 이보다 크게 해도 이득 적음, 훨씬 작게 하면 디테일 손실)")
     print(f"  960px 로는 상위 절반인데 원본에서는 하위 25%인 프레임: {hidden:.0f}% "
           f"(높으면 pick_best 가 미세한 흔들림을 못 거름)")
     worst = np.argsort(a["sharp_full"])[:5]
@@ -217,6 +231,50 @@ def read_model(folder):
     return d, cams, imgs, np.array(errs), np.array(tlen)
 
 
+FRAME_RE = None
+
+
+def frame_no(name):
+    global FRAME_RE
+    import re
+    FRAME_RE = FRAME_RE or re.compile(r"f_(\d+)_(\d+)")
+    m = FRAME_RE.search(os.path.basename(name))
+    return int(m.group(2)) if m else None
+
+
+def report_jumps(names, C, R_c2w, k=5.0):
+    """촬영 순서대로 속도·회전 속도가 튀는 사진 찾기. C: 중심(N,3), R_c2w: (N,3,3)"""
+    fr = np.array([frame_no(n) if frame_no(n) is not None else -1 for n in names])
+    if np.sum(fr >= 0) < 10:
+        print("  (파일명에서 원본 프레임 번호를 못 읽어 순간이동 검사는 건너뜀)")
+        return
+    o = np.argsort(fr); o = o[fr[o] >= 0]
+    C, R, fr = C[o], R_c2w[o], fr[o]
+    names = [names[i] for i in o]
+    df = np.maximum(np.diff(fr), 1)
+    v = np.linalg.norm(np.diff(C, axis=0), axis=1) / df                    # 단위/프레임
+    rot = np.array([np.degrees(np.arccos(np.clip((np.trace(R[i].T @ R[i + 1]) - 1) / 2, -1, 1)))
+                    for i in range(len(R) - 1)]) / df                       # 도/프레임
+    mv, mr = np.median(v), np.median(rot)
+    bad = np.where((v > k * max(mv, 1e-9)) & (v > np.percentile(v, 90)))[0]
+    print(f"  촬영 순서 이동: 중앙 {mv:.4f} 단위/프레임, 회전 중앙 {mr:.2f}도/프레임, "
+          f"중앙의 {k:g}배 넘게 튄 곳 {len(bad)}곳 (전체 {len(v)}구간)")
+    for i in bad[np.argsort(-v[bad])][:15]:
+        print(f"    {names[i]} -> {names[i + 1]}: {v[i] / mv:.0f}배 속도, 회전 {rot[i] * df[i]:.0f}도 / {df[i]} 프레임")
+    if len(bad):
+        print("  [주의] 튄 곳 앞뒤 사진은 엉뚱한 위치에 정합됐을 수 있음. SuperSplat/COLMAP GUI 로 카메라 위치 확인, "
+              "맞으면 그 사진들을 *_skip 으로 빼고 다시 정합 (sequential 매칭은 이런 오류가 적음)")
+
+
+def report_cameras_json(path):
+    cams = json.load(open(path, encoding="utf-8"))
+    names = [c.get("img_name", str(c.get("id"))) for c in cams]
+    C = np.array([c["position"] for c in cams], float)
+    R = np.array([c["rotation"] for c in cams], float)                     # 3DGS: camera-to-world 회전
+    print(f"  카메라 {len(cams)}대, {cams[0].get('width')}x{cams[0].get('height')}, fx {cams[0].get('fx'):.1f}")
+    report_jumps(names, C, R)
+
+
 def report_model(folder):
     d, cams, imgs, errs, tlen = read_model(folder)
     print(f"  모델 {d}: 카메라 {len(cams)}개, 등록 사진 {len(imgs)}장, 3D 점 {len(errs):,}개")
@@ -266,6 +324,7 @@ def report_model(folder):
         print("  [주의] 벽을 정면으로 본 사진이 적음 -> 벽 줄무늬·비스듬한 바늘형 스플랫의 주원인 (README 촬영 주의와 같음)")
     if np.mean(pitch > 20) < 0.05:
         print("  [주의] 천장을 본 사진이 거의 없음 -> 천장 구멍·반투명")
+    report_jumps([x[0] for x in imgs], C, np.array([r.T for r in R]))
 
 
 def main():
@@ -274,10 +333,11 @@ def main():
     ap.add_argument("--frames", nargs="*", default=[])
     ap.add_argument("--model", nargs="*", default=[])
     ap.add_argument("--ply", nargs="*", default=[])
+    ap.add_argument("--cameras-json", nargs="*", default=[])
     ap.add_argument("--ffprobe")
     ap.add_argument("--samples", type=int, default=40, help="영상/프레임 표본 수 (기본 40)")
     a = ap.parse_args()
-    if not (a.video or a.frames or a.model or a.ply):
+    if not (a.video or a.frames or a.model or a.ply or a.cameras_json):
         ap.print_help(); return
     for v in a.video:
         print(f"[영상] {v}")
@@ -289,6 +349,9 @@ def main():
     for m in a.model:
         print(f"[COLMAP] {m}")
         report_model(m)
+    for cj in a.cameras_json:
+        print(f"[cameras.json] {cj}")
+        report_cameras_json(cj)
     if a.ply:
         print("[PLY]")
         sys.argv = [sys.argv[0]] + a.ply

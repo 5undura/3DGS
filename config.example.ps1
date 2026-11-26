@@ -31,6 +31,8 @@ $ExtractArgs = @("--min-diff", "4", "--sharp-ratio", "0.8")
 # 특징점 추출 추가 옵션 (비워 두면 기본 SIFT). 흰 벽·어두운 곳은 ALIKED+LightGlue 가 유리하다고 COLMAP FAQ 에 있음.
 #   쓰기 전에 `COLMAP.bat feature_extractor -h` 에 FeatureExtraction.type 이 있는지 확인 (ONNX 포함 빌드 필요)
 #   예: @("--FeatureExtraction.type", "ALIKED_N16ROT")  -> 이때 $MatcherArgs 에 "--FeatureMatching.type", "ALIKED_LIGHTGLUE" 도 추가
+#   주의: COLMAP 4.2.1 Windows zip 에는 ALIKED GPU 용 CUDA 12 / cuDNN 9 DLL 이 없음 (colmap 이슈 #2342, #4369).
+#     설치 없이 쓰려면 CPU: "--FeatureExtraction.use_gpu", "0" (매칭도 "--FeatureMatching.use_gpu", "0", 느림)
 #   SIFT 유지 시 예: @("--SiftExtraction.estimate_affine_shape", "1", "--SiftExtraction.domain_size_pooling", "1")  (CPU 로 바뀌어 느림)
 $FeatureArgs = @()
 # 매칭: sequential(영상 순서대로 + 같은 곳 다시 지날 때 루프 연결, 빠름) / exhaustive(모든 쌍, 2,000장이면 수십 시간)
@@ -50,5 +52,6 @@ $Trainer = "lichtfeld"
 $GpuProfile = "3060ti"
 $Iterations = 30000
 $ShDegree = 2
-# 학습기에 덧붙일 옵션 (실험은 한 번에 하나만). 이름은 --help 로 확인. 예(LichtFeld): @("--tile-mode=2")
+# 학습기에 덧붙일 옵션 (실험은 한 번에 하나만). 이름은 --help 로 확인.
+#   예(LichtFeld v0.5.4.3+): @("--pose-opt")  /  @("--strategy=igs+")   (--tile-mode 는 v0.5.3 부터 없음)
 $TrainExtraArgs = @()

@@ -8,13 +8,13 @@
 | 단계 | 추천 | 대안 |
 |---|---|---|
 | 정합 | **COLMAP 4.2.1**: LightGlue 매칭 + sequential/loop + 전역 매퍼(GLOMAP 통합) | 같은 DB로 incremental `mapper` |
-| 학습 | **LichtFeld Studio v0.5.4.2** (소스 빌드 무료): MCMC + PPISP(노출·WB 보정) + 배경 변조 | **gsplat** `simple_trainer mcmc` (포즈 최적화·깊이 손실) |
+| 학습 | **LichtFeld Studio v0.5.4.3** (소스 빌드 무료): MCMC + PPISP(노출·WB 보정) + 배경 변조 | **gsplat** `simple_trainer mcmc` (포즈 최적화·깊이 손실) |
 | 기준선 | 현재 Brush 0.3 결과 (같은 구간·같은 평가 프레임) | — |
 
 **지금 구성 대비 실제로 바뀌는 것**
 1. 매칭 exhaustive(45시간) → sequential + loop → 프레임 솎아내기 불필요
 2. 노출·WB 보정(PPISP) — Brush엔 없음
-3. **배경 변조(`--bg-modulation`)**: 검은 배경이면 어두운 곳이 투명하게 남는데, 배경색을 바꿔 가며 학습해 불투명 스플랫으로 덮게 함 → 분홍 배경 비침(반투명 95%)에 직접 대응
+3. **배경 변조(`--bg-mode=modulation`, v0.5.3 전에는 `--bg-modulation`)**: 검은 배경이면 어두운 곳이 투명하게 남는데, 배경색을 바꿔 가며 학습해 불투명 스플랫으로 덮게 함 → 분홍 배경 비침(반투명 95%)에 직접 대응
 4. 왜곡 보정을 학습기가 처리(`--undistort`) → `image_undistorter` 단계 없어짐
 
 ## 제외한 것과 이유
@@ -39,7 +39,7 @@ git clone https://github.com/microsoft/vcpkg.git
 cd vcpkg && .\bootstrap-vcpkg.bat -disableMetrics && cd ..
 git clone --recurse-submodules https://github.com/MrNeRF/LichtFeld-Studio
 cd LichtFeld-Studio
-git checkout v0.5.4.2
+git checkout v0.5.4.3   # --pose-opt(자세 최적화) 가 들어간 버전 (2026-11-23)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja -DCMAKE_TOOLCHAIN_FILE="../vcpkg/scripts/buildsystems/vcpkg.cmake"
 cmake --build build -j
 ```
@@ -73,12 +73,12 @@ colmap global_mapper --database_path db_global.db --image_path images --output_p
 **③ 학습 (LichtFeld)** — 폴더에 `images/`, `sparse/0/`만 있으면 됨
 ```
 LichtFeld-Studio.exe -d D:\up\1 -o D:\up\1_lfs --strategy=mcmc --max-cap=2000000 --iter=30000 ^
-  --sh-degree=2 --max-width=2560 --undistort --ppisp --bg-modulation ^
+  --sh-degree=2 --max-width=2560 --undistort --ppisp --bg-mode=modulation --export=ply ^
   --eval --test-every=8 --headless
 ```
 - `--enable-mip`는 **끔** (Unity 셰이더는 고정 0.3px 확장만 써서 필터가 어긋남. 셰이더 고친 뒤 켜기)
 - `--gut`(3DGUT)도 끔 (Unity 일반 래스터라이저와 차이 미검증)
-- VRAM 부족: `--tile-mode=2`, `--max-width=1920`
+- VRAM 부족: `--max-width=1920`, `--max-cap` 낮추기 (`--tile-mode` 는 v0.5.3 부터 없음)
 - 개수 줄일 땐 사후 lite 대신 `--enable-sparsity`
 - 예상(추정): 30k 스텝 20~40분, 12GB 이내
 

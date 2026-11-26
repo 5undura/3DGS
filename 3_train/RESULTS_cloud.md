@@ -6,7 +6,7 @@
 **Windows 에서 먼저 확인**
 1. 버전: `COLMAP.bat -h`(4.x), `LichtFeld-Studio.exe --help`, `brush_app.exe --help`, `python -c "import cv2;print(cv2.__version__)"`, PowerShell `$PSVersionTable`
 2. COLMAP 옵션 이름: `COLMAP.bat sequential_matcher -h`(SequentialMatching.overlap / loop_detection), `view_graph_calibrator -h`, `global_mapper -h`, `feature_extractor -h`(ImageReader.single_camera / camera_model). loop detection 용 vocab tree 는 처음에 인터넷으로 내려받음
-3. LichtFeld: --strategy --max-cap --iter --sh-degree --max-width --ppisp --bg-modulation --eval --test-every --headless --tile-mode 가 --help 에 있는지
+3. LichtFeld: --strategy --max-cap --iter --sh-degree --max-width --ppisp --bg-mode --export --eval --test-every --headless --pose-opt 가 --help 에 있는지 (v0.5.4.3 소스로는 확인됨, --bg-modulation/--tile-mode 는 없어짐)
 4. Brush: $Iterations 를 30000 이 아닌 값으로 바꾸면 총 스텝 옵션(--help 에서 이름 확인)도 넘겨야 함. 지금은 --export-every 에만 씀
 5. 한글 경로(F:\Sample\4차\up)를 COLMAP 이 읽는지. 안 되면 영문 경로 작업 폴더로
 **60초 시험 실행**: `ffmpeg -ss 0 -t 60 -i <영상>\1.MP4 -c copy F:\Sample\4차\up_test\1.MP4` → config.ps1 을 `$Work="F:\Sample\4차\up_test"`, `$Sections=1`, `$Iterations=2000` 으로 → `.\run_all.ps1` → `up_test\night_log.txt`(UTF-16), `1b\data\sparse\0`, `1c_lichtfeld\*.ply` 확인

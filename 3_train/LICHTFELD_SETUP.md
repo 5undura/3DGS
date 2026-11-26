@@ -17,7 +17,7 @@ git clone https://github.com/microsoft/vcpkg.git
 cd vcpkg && .\bootstrap-vcpkg.bat -disableMetrics && cd ..
 git clone --recurse-submodules https://github.com/MrNeRF/LichtFeld-Studio
 cd LichtFeld-Studio
-git checkout v0.5.4.2
+git checkout v0.5.4.3   # --pose-opt(자세 최적화) 가 들어간 버전 (2026-11-23)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -G Ninja -DCMAKE_TOOLCHAIN_FILE="../vcpkg/scripts/buildsystems/vcpkg.cmake" -DCMAKE_CUDA_ARCHITECTURES=native
 cmake --build build -j
 ```
@@ -25,7 +25,7 @@ cmake --build build -j
 - 빌드 중 메모리 부족이면 `cmake --build build -j4`
 - 백신·OneDrive가 vcpkg 폴더를 막으면 예외 처리
 - 완성된 실행 파일 경로를 `config.ps1`의 `$LichtFeld`에 적기
-- 실행 전 `LichtFeld-Studio.exe --help`로 옵션 이름 확인 (`3_train/train_all.ps1`에서 쓰는 옵션: `--strategy=mcmc --max-cap --iter --sh-degree --max-width --ppisp --bg-modulation --eval --test-every --headless`, VRAM 부족 시 `--tile-mode=2`)
+- 실행 전 `LichtFeld-Studio.exe --help`로 옵션 이름 확인 (`3_train/train_all.ps1`에서 쓰는 옵션: `--strategy=mcmc --max-cap --iter --sh-degree --max-width --ppisp --bg-mode=modulation --export=ply --eval --test-every --headless`, v0.5.4.3 소스로 확인. `--bg-modulation`·`--tile-mode` 는 v0.5.3 부터 없음, v0.5.4 부터 `--export=ply` 없으면 PLY 안 나옴. 자세 최적화 `--pose-opt` 는 v0.5.4.3 부터)
 
 ## COLMAP 4.x
 - https://github.com/colmap/colmap/releases 에서 Windows CUDA 빌드(4.2.1 이상) 받기. GLOMAP 전역 정합이 `global_mapper`로 들어 있어 따로 설치할 것 없음
