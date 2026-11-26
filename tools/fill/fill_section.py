@@ -142,7 +142,8 @@ imgdir = os.path.join(SRC, "images")
 views = sorted(ims, key=lambda d: d["name"])[::STEP]
 bestS = np.full((len(Pw), 6), np.inf); cols = np.zeros((len(Pw), 6, 3), np.float32)
 for vi, im in enumerate(views):
-    img = cv2.imread(os.path.join(imgdir, im["name"]), cv2.IMREAD_REDUCED_COLOR_4)
+    # cv2.imread 는 한글 경로를 못 읽음 -> fromfile + imdecode
+    img = cv2.imdecode(np.fromfile(os.path.join(imgdir, im["name"]), np.uint8), cv2.IMREAD_REDUCED_COLOR_4)
     if img is None: continue
     h, w = img.shape[:2]; rs = cam["w"] / w
     Xc = Pw @ im["R"].T + im["t"]; zc = Xc[:, 2]; ok = zc > 0.05 * S
