@@ -16,14 +16,15 @@ $profiles = @{
 $p = $profiles[$GpuProfile]
 if (-not $p) { throw "알 수 없는 GpuProfile: $GpuProfile (3060ti / 5070)" }
 
+New-Item -ItemType Directory -Force $Work | Out-Null
 $log = Join-Path $Work "night_log.txt"
 function Log($msg) { $msg | Tee-Object -FilePath $log -Append }
 
 foreach ($n in $Sections) {
     $data = Join-Path $Work "${n}b\data"
     $out  = Join-Path $Work "${n}c_$Trainer"
-    if (-not (Test-Path (Join-Path $data "sparse\0"))) { Write-Host "[$n] 정합 결과 없음: $data (건너뜀)"; continue }
-    if ((Test-Path $out) -and (Get-ChildItem $out -Filter *.ply -Recurse -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $data "sparse\0"))) { Write-Host "[$n] 정합 결과 없음: $data (건너뜀)"; continue }
+    if ((Test-Path -LiteralPath $out) -and (Get-ChildItem -LiteralPath $out -Filter *.ply -Recurse -ErrorAction SilentlyContinue)) {
         Write-Host "[$n] 이미 학습됨 (건너뜀)"; continue
     }
     New-Item -ItemType Directory -Force $out | Out-Null
@@ -37,16 +38,24 @@ foreach ($n in $Sections) {
                   "--sh-degree=$ShDegree", "--max-width=$($p.Width)", "--ppisp", "--bg-modulation",
                   "--eval", "--test-every=8", "--headless")
         if ($p.Tile -gt 1) { $targs += "--tile-mode=$($p.Tile)" }
-        & $LichtFeld @targs
+        # | Out-Host: GUI 형식 exe 라도 끝날 때까지 기다리게 함 ($LASTEXITCODE 도 유지)
+        & $LichtFeld @targs | Out-Host
     }
     elseif ($Trainer -eq "brush") {
         # (Brush 기본 학습 스텝은 30,000)
         $targs = @($data, "--max-splats", "$($p.Cap)", "--sh-degree", "$ShDegree", "--max-resolution", "$($p.Width)",
                    "--export-every", "$Iterations", "--export-path", $out)
-        & $Brush @targs
+        & $Brush @targs | Out-Host
     }
     else { throw "알 수 없는 Trainer: $Trainer (lichtfeld / brush)" }
 
-    if ($LASTEXITCODE -ne 0) { Log "[$n] 학습 실패 (종료 코드 $LASTEXITCODE)"; continue }
+    if ($LASTEXITCODE -ne 0) {
+        # 중간 PLY 가 남아 있으면 다음 실행에서 "이미 학습됨"으로 건너뛰므로 옆으로 치움 (삭제 안 함)
+        $code = $LASTEXITCODE
+        $old = "${n}c_${Trainer}_failed_$(Get-Date -Format yyyyMMdd_HHmmss)"
+        Rename-Item -LiteralPath $out -NewName $old
+        Log "[$n] 학습 실패 (종료 코드 $code) -> $old"
+        continue
+    }
     Log "[$n] 학습 끝 $(Get-Date)"
 }

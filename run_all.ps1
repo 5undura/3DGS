@@ -2,6 +2,9 @@
 # 사용: run_all.bat 더블클릭, 또는 PowerShell 에서  .\run_all.ps1
 # 이미 끝난 단계·구간은 건너뛰므로 중간에 끊겨도 다시 실행하면 이어서 진행됨.
 $ErrorActionPreference = "Continue"
+if (-not (Test-Path -LiteralPath "$PSScriptRoot\config.ps1")) {
+    throw "config.ps1 없음: config.example.ps1 을 복사해서 config.ps1 로 만들고 경로를 고칠 것"
+}
 . "$PSScriptRoot\config.ps1"
 New-Item -ItemType Directory -Force $Work | Out-Null
 $log = Join-Path $Work "night_log.txt"

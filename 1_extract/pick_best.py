@@ -14,6 +14,11 @@ Options:
     --max-gap S      if nothing was kept for S seconds, force-keep the sharpest
                      frame of that stretch so there are no holes (default 1.0)
     --min-gap N      never keep two frames closer than N frames apart (default 3)
+    --abs-floor-pct P  absolute sharpness floor: drop frames below the P-th percentile
+                     of the sharpness of the WHOLE video (default 0 = off). The
+                     --max-gap forced keep is also skipped below the floor, so long
+                     blurry stretches become gaps; those gaps are printed at the end.
+                     P > 0 reads the video twice (first pass = sharpness only).
 """
 import argparse
 import os
@@ -25,6 +30,44 @@ import cv2
 import numpy as np
 
 
+def sharpness(frame):
+    """(Laplacian variance at 960 px long side, gray image) - same measure in both passes"""
+    h, w = frame.shape[:2]
+    s = 960.0 / max(h, w)
+    gray = cv2.cvtColor(cv2.resize(frame, (int(w * s), int(h * s)),
+                                   interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+    return cv2.Laplacian(gray, cv2.CV_64F).var(), gray
+
+
+def tc(i, fps):
+    t = i / fps
+    return f"{int(t // 60):d}:{t % 60:05.2f}"
+
+
+def sharpness_floor(path, pct):
+    """first pass: sharpness of every frame -> P-th percentile"""
+    cap = cv2.VideoCapture(path)
+    if not cap.isOpened():
+        raise SystemExit(f"Cannot open {path}")
+    vals = []
+    t0 = time.time()
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        vals.append(sharpness(frame)[0])
+        if len(vals) % 3000 == 0:
+            print(f"  pass 1: frame {len(vals)}  {len(vals) / (time.time() - t0):.1f} f/s")
+    cap.release()
+    if not vals:
+        raise SystemExit(f"No frames in {path}")
+    v = np.array(vals)
+    floor = float(np.percentile(v, pct))
+    print(f"Pass 1: {len(v)} frames, sharpness min {v.min():.1f} / median {np.median(v):.1f} / "
+          f"max {v.max():.1f} -> floor (p{pct:g}) = {floor:.1f}, {time.time() - t0:.0f}s")
+    return floor
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("video")
@@ -33,7 +76,10 @@ def main():
     ap.add_argument("--min-diff", type=float, default=6.0)
     ap.add_argument("--max-gap", type=float, default=1.0)
     ap.add_argument("--min-gap", type=int, default=3)
+    ap.add_argument("--abs-floor-pct", type=float, default=0.0)
     a = ap.parse_args()
+    if not 0 <= a.abs_floor_pct < 100:
+        raise SystemExit("--abs-floor-pct must be in [0, 100)")
     os.makedirs(a.out_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(a.video)
@@ -44,10 +90,14 @@ def main():
     max_gap = max(1, int(round(a.max_gap * fps)))
     hist = deque(maxlen=int(2 * fps))  # ~2 s of sharpness values
     print(f"{a.video}: {fps:.2f} fps, {total} frames")
+    floor = sharpness_floor(a.video, a.abs_floor_pct) if a.abs_floor_pct > 0 else None
 
     last_thumb, last_keep = None, -10**9
     cand = None  # (score, idx, frame, thumb) best frame since last keep
     idx = saved = forced = 0
+    floor_drop = forced_skip = 0
+    blocked = False   # a forced keep was skipped (below floor) since the last keep
+    gaps = []         # (from_frame, to_frame) stretches left empty because of the floor
     t0 = time.time()
 
     def save(frame, i):
@@ -63,11 +113,7 @@ def main():
         ok, frame = cap.read()
         if not ok:
             break
-        h, w = frame.shape[:2]
-        s = 960.0 / max(h, w)
-        gray = cv2.cvtColor(cv2.resize(frame, (int(w * s), int(h * s)),
-                                       interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
-        sharp = cv2.Laplacian(gray, cv2.CV_64F).var()
+        sharp, gray = sharpness(frame)
         hist.append(sharp)
         thumb = cv2.resize(gray, (160, int(160 * gray.shape[0] / gray.shape[1])),
                            interpolation=cv2.INTER_AREA).astype(np.int16)
@@ -80,13 +126,27 @@ def main():
         far_enough = idx - last_keep >= a.min_gap
         diff = 255.0 if last_thumb is None else float(np.abs(thumb - last_thumb).mean())
 
-        if sharp_ok and far_enough and diff >= a.min_diff:
+        above = floor is None or sharp >= floor
+        if sharp_ok and far_enough and diff >= a.min_diff and not above:
+            floor_drop += 1
+        if sharp_ok and far_enough and diff >= a.min_diff and above:
+            if blocked:
+                gaps.append((last_keep, idx))
+                blocked = False
             save(frame, idx)
             last_thumb, last_keep, cand = thumb, idx, None
         elif idx - last_keep >= max_gap and cand is not None:
-            save(cand[2], cand[1])
-            forced += 1
-            last_thumb, last_keep, cand = cand[3], cand[1], None
+            if floor is None or cand[0] >= floor:
+                if blocked:
+                    gaps.append((last_keep, cand[1]))
+                    blocked = False
+                save(cand[2], cand[1])
+                forced += 1
+                last_thumb, last_keep, cand = cand[3], cand[1], None
+            else:
+                # best frame of the stretch is still below the floor -> keep waiting
+                forced_skip += 1
+                blocked = True
 
         idx += 1
         if idx % 3000 == 0:
@@ -95,6 +155,19 @@ def main():
 
     print(f"Done: {saved} images ({forced} forced to fill gaps) in {a.out_dir}, "
           f"{time.time() - t0:.0f}s")
+    if floor is not None:
+        if blocked:
+            gaps.append((last_keep, idx))
+        print(f"Floor {floor:.1f}: {floor_drop} otherwise-kept frames dropped, "
+              f"forced keep skipped on {forced_skip} frames")
+        if gaps:
+            span = sum(b - max(f0, 0) for f0, b in gaps)
+            print(f"Gaps left by the floor: {len(gaps)} (total {span / fps:.1f}s)")
+            for f0, b in gaps:
+                f0 = max(f0, 0)
+                print(f"  frames {f0}-{b}  {tc(f0, fps)} - {tc(b, fps)}  ({(b - f0) / fps:.1f}s)")
+        else:
+            print("Gaps left by the floor: none")
     if saved > 3000:
         print("Over 3000 images: alignment will be slow. Re-run with a larger --min-diff (e.g. 9).")
     elif saved < 800:
