@@ -6,6 +6,7 @@ LichtFeld Studio: https://github.com/MrNeRF/LichtFeld-Studio (GPLv3). Windows �
 ## 준비물
 - NVIDIA 드라이버 570 이상
 - Visual Studio **2022** Community + "Desktop development with C++" (2019·2026 안 됨)
+  - **개별 구성 요소 "C++ Clang Compiler for Windows"(clang-cl) 도 필요** (v0.5.4.3 의 libplacebo 의존성. 없으면 vcpkg 단계에서 실패, 2026-11-27 확인)
   - 한글 Windows면 Visual Studio Installer에서 **영어 언어팩** 추가
 - CUDA Toolkit **12.8** (다른 버전이 깔려 있으면 먼저 제거)
 - Git, CMake 3.30+, Strawberry Perl 5.42+

@@ -50,6 +50,9 @@
   - 03:50 설치 확인됨 (VS2022 Community + 영어 팩, CUDA 12.8, Strawberry Perl, CMake 3.31.6/Ninja 는 VS 포함).
     `F:\Sample\tools\lfs\{vcpkg, LichtFeld-Studio(v0.5.4.3)}` 클론, 소스 argument_parser.cpp 에 `--pose-opt` 있음 확인.
     빌드 스크립트 `F:\Sample\tools\lfs\build_lfs.bat` (CUDA arch 86 = 3060 Ti 전용. 5070 PC 에서 쓰려면 "86;120" 으로 다시 빌드), 로그 `build_log2.txt`. vcpkg 가 의존성을 받아 빌드하느라 오래 걸림
+  - 06:00 **빌드 실패**: vcpkg 의존성 libplacebo(LichtFeld 오버레이 포트)가 Windows 에서 clang-cl 을 요구
+    ("Install the 'C++ Clang Compiler for Windows' individual component"). 이 PC 에 clang-cl 없음 → **VS2022 Installer > 개별 구성 요소 > "Windows용 C++ Clang 컴파일러" 설치 필요 (사용자 확인 대기)**.
+    다른 의존성(ffmpeg, python3 등)은 빌드됨. C: 의 vcpkg 바이너리 캐시 저장이 "다른 드라이브로 옮길 수 없음"으로 실패 → build_lfs.bat 에 VCPKG_DEFAULT_BINARY_CACHE=F:\Sample\tools\lfs\vcpkg_cache 추가
   → 그동안 "자세가 원인인지"를 **재정합 전후 / 순간이동 사진 제외 전후 Brush PSNR** 로 간접 확인
 
 ## 오늘 밤 계획 (GPU 작업은 하나씩)
