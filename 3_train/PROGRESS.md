@@ -12,6 +12,15 @@
 - [x] 빈 곳 채우기 (tools/fill, `up\prev_1\1b` 기준) → `up\prev_1\1c\brush_fill\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
 - [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 PPISP → exposure-correction) 차이 없음. L4(2560) 더 나쁨(-0.11) → 1920 유지. L5(400만) 차이 없음 → 300만 유지. L6(50,000회) 26.70 / 55.7%, **L7(80,000회) 26.79 / 반투명 49.4% = 지금까지 최고**. L8(120,000회)은 재촬영 때문에 중단(중간물 삭제)
 
+## 5차 재촬영 (11-27 밤~) — 영상 `F:\Sample\5차_실험\0_영상\1~6.MP4`, 작업 `F:\Sample\5차_실험\up`
+- 1·2 복도, 3·4·5·6 방. 재촬영 때 문 열림/닫힘이 달라져 방 구성이 이전과 하나 빠지고 하나 더해졌을 수 있음 (사용자)
+- 영상 크기: 1 11.8GB, 2 6.2GB, 3 6.4GB, 4 2.3GB, 5 3.1GB, 6 7.1GB
+- `5차_실험\5a` (11-26 생성) 가 이미 있어 그대로 두고, 새 작업 폴더 `up` 사용 (5번이 "이미 추출됨"으로 건너뛰는 것 방지)
+- config.ps1 (로컬): Work=`5차_실험\up`, VideoDir=`5차_실험\0_영상`, Sections 1..6, **Mapper incremental** (global 은 복도 1 에서 순간이동 100곳)
+- 진행: 추출(pick_best, --min-diff 4 --sharp-ratio 0.8) → 정합(sequential overlap 20 + loop, incremental) 백그라운드 시작 (11-27 밤)
+- 계획: 정합 끝난 구간부터 diagnose → 순간이동 사진 제외 → LichtFeld 최고 설정(80k, pose-opt, MRNF) 학습. 이후 추출·정합·학습 방식을 한 가지씩 바꿔 비교
+- ⚠️ 시간: 이전 복도 1 incremental 정합이 1100장에 281분. 6구간이면 이 PC 로 하루 가까이 걸릴 수 있음 → 오래 걸리면 팀원 PC 로 넘길 후보
+
 ## 정리 (11-27 저녁) — 재촬영 전 결론
 **복도 1 최고 설정 (LichtFeld v0.5.4.3)**: 1920, 300만, SH2, MRNF, `--pose-opt`, exposure-correction(기본), 학습 80,000회
 ```powershell
