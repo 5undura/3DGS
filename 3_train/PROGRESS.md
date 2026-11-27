@@ -36,7 +36,7 @@
 | 정합 | 등록 | 3D 점 | 재투영 오차 평균/중앙 | 점 100개 미만 사진 | 순간이동(5배↑) | 시간 | 판정 |
 |---|---|---|---|---|---|---|---|
 | 원래 4차 1b (exhaustive?, incremental) | 1084 | 64.5만 | 1.05 / 1.02 | 18 | 17 | - | 기준 |
-| global (GLOMAP) `up\1b` | 1082 | 48.8만 | 1.04 / 0.92 | 65 | **100** | 46분 | **못 씀**: f_00437~00453 9장이 수천 단위 밖으로 튐(궤적 길이 15→3197), 복도 중간 f_00745~00825 도 크게 튐 |
+| global (GLOMAP) `up\1b_global_skip` | 1082 | 48.8만 | 1.04 / 0.92 | 65 | **100** | 46분 | **못 씀**: f_00437~00453 9장이 수천 단위 밖으로 튐(궤적 길이 15→3197), 복도 중간 f_00745~00825 도 크게 튐 |
 | incremental `up\inc\1b` | 1072 | 54.3만 | **0.96 / 0.92** | 31 | **12** | 281분 | **원래보다 나음** (재투영 1px 미만, 순간이동 17→12). 남은 12곳 중 상당수는 22~45 프레임 간격(사이 프레임 미등록)이라 일부는 실제 이동일 수 있음. Brush 평가 진행 중 `up\inc\1c_brush` |
 
 ## Brush 비교 (기준선 설정, 평가 8장마다 1장)
@@ -86,3 +86,10 @@
 - 새 도구 `tools/fill/merge_holes.py`: 벽 바탕층은 빼고, 바닥·천장 바탕층 중 학습 스플랫이 덮지 않은 곳(반경 4.5cm 안 불투명도 합 < 1)만 합침
   - `up\1c_brush_origskip\holes_backdrop.ply` : 기준선(순간이동 제외) + 바탕층 3.8만 개 ← **추천 확인 대상**
   - `up\1c_fill_origskip\fill_holes.ply` : 빈 곳 채우기 학습 + 바탕층 0.9만 개
+
+## 폴더 정리 (11-27 12:00)
+- `up\1b` (global 정합, 못 씀) → `up\1b_global_skip` 로 이름 변경 (삭제 안 함, `1b` 이름은 새 파이프라인 실행용으로 비워 둠)
+- `up\*.log`, `run_fill_origskip.ps1` → `up\logs\` 로 모음
+- `F:\Sample\tools\lfs` 의 실패한 빌드 로그(build_log, build_log2, vs2026/경로 오류 시도) 삭제. 내용은 위 시행착오에 요약돼 있음
+- LichtFeld 빌드 시행착오 추가: ① build_lfs.bat 의 한글 주석을 cmd 가 CP949 로 잘못 읽어 vcvars64 줄이 실행 안 됨 → bat 은 ASCII 만
+  ② vcpkg 가 VS2026(18, MSVC 14.52) 컴파일러를 고름 → `F:\Sample\tools\lfs\triplets\x64-windows.cmake` 에 `VCPKG_VISUAL_STUDIO_PATH`(VS2022, 백슬래시 두 번) + `VCPKG_PLATFORM_TOOLSET v143`, cmake 에 `-DVCPKG_OVERLAY_TRIPLETS` → MSVC 14.44 로 빌드 진행 중

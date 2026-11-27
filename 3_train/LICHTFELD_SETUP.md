@@ -32,3 +32,15 @@ cmake --build build -j
 - https://github.com/colmap/colmap/releases 에서 Windows CUDA 빌드(4.2.1 이상) 받기. GLOMAP 전역 정합이 `global_mapper`로 들어 있어 따로 설치할 것 없음
 - 50 시리즈(5070 등)는 옛 COLMAP CUDA 빌드가 안 돌 수 있음 → 최신 버전
 - 처음 한 번 `COLMAP.bat sequential_matcher -h`로 `config.ps1`의 `$MatcherArgs` 옵션 이름이 맞는지 확인
+
+## VS2026 이 같이 깔린 PC (2026-11-27)
+- vcpkg 는 가장 새 VS 를 고름 → VS2026(MSVC 14.5x) 이 있으면 VS2022 로 고정해야 함. overlay triplet 예 (`<폴더>\x64-windows.cmake`):
+  ```cmake
+  set(VCPKG_TARGET_ARCHITECTURE x64)
+  set(VCPKG_CRT_LINKAGE dynamic)
+  set(VCPKG_LIBRARY_LINKAGE dynamic)
+  set(VCPKG_VISUAL_STUDIO_PATH "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community")
+  set(VCPKG_PLATFORM_TOOLSET v143)
+  ```
+  cmake 설정에 `-DVCPKG_OVERLAY_TRIPLETS=<폴더>` 추가. 경로를 `/` 로 쓰면 "Unable to find a valid Visual Studio instance"
+- 빌드용 .bat 파일에 한글을 넣지 말 것 (cmd 가 줄을 잘못 읽음)
