@@ -2,8 +2,10 @@
 import { api, toast, $, esc } from './util.js';
 import { initSpace } from './space.js';
 import { initPath } from './path.js';
+import { initResults } from './results.js';
+import { initSettings } from './settings.js';
 
-const state = { tab: 'project', project: null };
+const state = { tab: 'project', project: null, results: null };
 const TABS = ['project', 'space', 'path', 'run', 'result'];
 const STATE_TXT = { done: '끝', todo: '대기', skip: '건너뜀', fail: '실패', running: '진행 중' };
 
@@ -12,23 +14,25 @@ async function main() {
   catch (e) { document.body.innerHTML = `<p class="warn" style="padding:24px">프로젝트를 못 읽음: ${esc(e.message)}</p>`; return; }
   $('#proj-name').textContent = state.project.name;
   renderProject();
+  initSettings();
+  state.results = initResults(state);
   const path = initPath(state);           // onPlan 을 먼저 등록
   const space = initSpace(state);
   await space.load();
   path.open();
   initRun();
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
-  const fromHash = () => { const h = location.hash.slice(1); show(TABS.includes(h) ? h : 'project'); };
+  const fromHash = () => { const [h, sub] = location.hash.slice(1).split(':'); show(TABS.includes(h) ? h : 'project', sub); };
   window.addEventListener('hashchange', fromHash);
   fromHash();
 }
 
-function show(tab) {
-  state.tab = tab; if (location.hash.slice(1) !== tab) location.hash = tab;
+function show(tab, sub) {
+  state.tab = tab; if (location.hash.slice(1).split(':')[0] !== tab) location.hash = tab;
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   document.querySelectorAll('.tab').forEach(s => s.classList.toggle('on', s.id === `tab-${tab}`));
   if (tab === 'run') refreshRun();
-  if (tab === 'result' && !$('#report-frame').src) $('#report-frame').src = '/api/report?rebuild=1';
+  if (tab === 'result') state.results?.show(sub);   // #result:walls · #result:tex
 }
 
 // ---------- 프로젝트 ----------
@@ -106,8 +110,5 @@ async function refreshLog(rs) {
   pre.textContent = lines.join('\n') || '로그 없음';
   if (atEnd) pre.scrollTop = pre.scrollHeight;
 }
-
-// ---------- 결과 ----------
-$('#report-rebuild').onclick = () => { $('#report-frame').src = '/api/report?rebuild=1&_=' + Date.now(); };
 
 main();

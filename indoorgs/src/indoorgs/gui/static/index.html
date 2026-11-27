@@ -34,6 +34,10 @@
     <dl id="proj-summary" class="kv"></dl>
     <h3>구간</h3>
     <table class="grid" id="proj-sections"></table>
+    <h3>학습 후 처리 설정 <span class="muted small">(project.yaml · 다음 실행부터)</span></h3>
+    <div id="post-settings" class="post-set"></div>
+    <div class="btnrow"><button id="ps-save" class="primary">설정 저장</button><button id="ps-reset">되돌리기</button>
+      <span id="ps-dirty" class="muted small"></span></div>
   </section>
 
   <!-- 공간 -->
@@ -130,9 +134,34 @@
 
   <!-- 결과 -->
   <section id="tab-result" class="tab col">
-    <div class="toolbar"><button id="report-rebuild">보고서 다시 만들기</button>
-      <a href="/api/report" target="_blank">새 창으로</a></div>
+    <div class="toolbar">
+      <div class="seg" id="result-views">
+        <button data-view="report" class="on">보고서</button>
+        <button data-view="walls">벽·정리</button>
+        <button data-view="tex">면 텍스처</button>
+      </div>
+      <span class="sep"></span>
+      <span id="result-report-tools"><button id="report-rebuild">보고서 다시 만들기</button>
+        <a href="/api/report" target="_blank">새 창으로</a></span>
+      <span id="result-sec-tools" class="hidden">
+        <select id="walls-section" title="구간"></select>
+        <select id="walls-run" title="학습 폴더"></select>
+        <button id="walls-reload">새로고침</button></span>
+    </div>
     <iframe id="report-frame" title="보고서"></iframe>
+    <div id="walls-panel" class="rpanel hidden"></div>
+    <div id="tex-panel" class="rpanel tex hidden">
+      <aside id="tex-list" class="texlist"></aside>
+      <div class="texview">
+        <div class="toolbar flat">
+          <label class="chk"><input type="checkbox" id="tex-overlay" checked> 출처 표시</label>
+          <label class="small muted">진하기 <input type="range" id="tex-alpha" min="0.1" max="1" step="0.05" value="0.55" style="width:100px"></label>
+          <span class="legend small"><i style="background:#22c55e"></i>사진 <i style="background:#f59e0b"></i>메움(PatchMatch) <i style="background:#a855f7"></i>직접 칠함</span>
+          <span class="grow"></span><span id="tex-info" class="muted small"></span>
+        </div>
+        <div class="texbox"><canvas id="tex-canvas"></canvas></div>
+      </div>
+    </div>
   </section>
 </main>
 

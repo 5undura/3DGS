@@ -15,6 +15,9 @@ API (모두 /api 아래)
   GET  logs                         logs/*.log 목록
   GET  logs/{file}?n=200            꼬리 n줄
   GET  report?rebuild=1             report.html
+  GET  walls/{section}?run=         벽·정리 결과 (planes.json, walls.json, clean.json, repair.json, 면 텍스처 목록)
+  GET  walls/{section}/tex/{file}   walls/tex 안 PNG 만 (면 텍스처, .src.png 출처 마스크)
+  GET  settings/post / PUT          project.yaml 의 walls·cleanup 중 GUI 항목 (주석·다른 줄 유지, config.parse 검사)
 """
 from __future__ import annotations
 
@@ -34,7 +37,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import schemas
 from ..project import Project
 from ..stages.base import StageContext, all_stages, run_all, status
-from . import plan_import
+from . import plan_import, post
 
 STATIC = Path(__file__).parent / "static"
 LOG_NAME = re.compile(r"^[A-Za-z0-9_\-]+\.log$")
@@ -306,6 +309,41 @@ def create_app(project_root: str | Path) -> FastAPI:
             from ..stages.report import write_report
             write_report(p)
         return HTMLResponse(p.report.read_text(encoding="utf-8"))
+
+    @app.get("/api/walls/{name}")
+    def get_walls(name: str, run: str | None = None):
+        p = proj()
+        sp = section_paths(p, name)
+        try:
+            data = post.section_walls(p, sp, run or None)
+        except KeyError as e:
+            raise HTTPException(404, str(e).strip("'\""))
+        return {"section": name} | data
+
+    @app.get("/api/walls/{name}/tex/{file}")
+    def get_wall_tex(name: str, file: str):
+        sp = section_paths(proj(), name)
+        try:
+            f = post.texture_file(sp, file)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except FileNotFoundError:
+            raise HTTPException(404, "텍스처 없음")
+        return FileResponse(f, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+    # ---------- 후처리 설정 ----------
+    @app.get("/api/settings/post")
+    def get_post_settings():
+        return post.post_settings(proj().cfg)
+
+    @app.put("/api/settings/post")
+    def put_post_settings(data: dict = Body(...)):
+        if runner.busy():
+            raise HTTPException(409, "실행 중에는 설정을 바꿀 수 없음")
+        try:
+            return post.save_post_settings(proj().config_path, data)
+        except post.SettingsError as e:
+            raise HTTPException(400, str(e))
 
     # ---------- 화면 ----------
     @app.get("/", include_in_schema=False)
