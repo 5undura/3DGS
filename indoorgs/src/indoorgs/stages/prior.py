@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from .. import schemas
-from ..pathing import build_priors
+from ..pathing import build_priors, check_duration, outside_segments
 from .base import Stage, StageContext, StageResult
 
 
@@ -33,7 +33,19 @@ class Prior(Stage):
         outside = [f["image"] for f in priors["frames"] if plan.room_at(f["xyz"][0], f["xyz"][1]) is None]
         if outside:
             warnings.append(f"동선 위치가 어느 방에도 안 들어가는 프레임 {len(outside)}장 (예: {outside[0]}). 동선이나 방 크기 확인")
+        segs = outside_segments(cam, plan, min_len=0.3)
+        for seg in segs:
+            warnings.append(f"동선이 방 밖으로 나감: s={seg['s0']}~{seg['s1']}m ({seg['start']} -> {seg['end']})")
+        done = schemas.read_json(p.frames_done)
+        duration = None
+        if done.get("total_frames"):
+            duration = float(done["total_frames"]) / fps
+            warnings += check_duration(cam, duration)
         for w in warnings:
             ctx.log("경고: " + w)
         schemas.write_json(p.priors, priors)
+        # GUI·report 가 읽는 경고 파일 (priors.json 옆)
+        schemas.write_json(p.colmap / "priors_warnings.json",
+                           {"version": schemas.VERSION, "warnings": warnings, "outside_frames": outside,
+                            "outside_segments": segs, "video_duration": duration})
         return StageResult(True, f"{len(frames)}장 위치 생성, 경고 {len(warnings)}개", [p.priors])

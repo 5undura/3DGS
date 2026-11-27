@@ -85,8 +85,9 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
  "source": {"kind": "boxes"}}
 ```
 
-- 방은 `box`(중심·크기·회전) 또는 `floor`(바닥 다각형, 반시계) 중 하나. 읽을 때 `box`는 `floor`로 바뀐다.
-- `source.kind`: `boxes` | `dxf` | `image`. 이미지면 `image`, `px_per_m`, 원근 보정 네 점을 함께 적는다.
+- 방은 `box`(중심·크기·회전) 또는 `floor`(바닥 다각형, 반시계) 중 하나. 읽을 때 `box`로 `floor`를 계산하고, `Room.box`에 박스 정보도 남겨 다시 쓸 때 `box`로 저장한다.
+- `source.kind`: `boxes` | `dxf` | `svg` | `image`. 이미지면 `px_per_m`, 원근 보정 네 점(`corners`)·`size_m`을 함께 적는다.
+- 편집·불러오기 API는 `indoorgs.space` (`SpaceModel`, `import_dxf/svg/image`).
 
 ### sections/<name>/path.json (B가 씀)
 
@@ -99,6 +100,12 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
 - `stroke`: 브러시로 그린 선(걸은 순서). 없으면 고정점들을 직선으로 이은 것.
 - `anchors`: 고정점. `point`(도면 좌표)는 선 위 가장 가까운 곳으로 붙고, `s`는 선 시작부터의 거리(m). `t`는 영상 시간(초).
 - 고정점 사이는 선을 따라 일정한 속도. 첫 고정점 전·마지막 뒤는 그 자리에 멈춘 것으로 본다. 멈춤은 같은 위치에 고정점 두 개.
+
+### colmap/priors_warnings.json (prior가 씀, GUI·report가 읽음)
+
+```json
+{"version": 1, "warnings": ["..."], "outside_frames": ["f_..."], "outside_segments": [{"s0": 3.1, "s1": 4.0, "start": [x, y], "end": [x, y], "length": 0.9}], "video_duration": 120.0}
+```
 
 ### colmap/priors.json (prior가 씀, register가 읽음)
 

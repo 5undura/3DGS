@@ -36,6 +36,7 @@ class Room:
     floor_z: float = 0.0
     ceiling_z: float | None = None
     name: str = ""
+    box: dict | None = None             # 박스로 만든 방이면 {"center", "size", "yaw_deg"} 유지 (floor 는 여기서 계산)
 
     def contains(self, x: float, y: float) -> bool:
         """점이 바닥 다각형 안에 있는지 (경계 포함 아님, 짝홀 규칙)."""
@@ -74,10 +75,19 @@ class Plan:
 
     def to_json(self) -> dict:
         return {"version": VERSION, "units": "m",
-                "rooms": [{"id": r.id, "name": r.name, "floor": [list(p) for p in r.floor],
-                           "floor_z": r.floor_z, "ceiling_z": r.ceiling_z} for r in self.rooms],
+                "rooms": [_room_json(r) for r in self.rooms],
                 "doors": [asdict(d) | {"center": list(d.center)} for d in self.doors],
                 "source": self.source}
+
+
+def _room_json(r: Room) -> dict:
+    d = {"id": r.id, "name": r.name}
+    if r.box is not None:
+        b = r.box
+        d["box"] = {"center": list(b["center"]), "size": list(b["size"]), "yaw_deg": float(b.get("yaw_deg", 0.0))}
+    else:
+        d["floor"] = [list(p) for p in r.floor]
+    return d | {"floor_z": r.floor_z, "ceiling_z": r.ceiling_z}
 
 
 def box_to_floor(center, size, yaw_deg=0.0) -> list[tuple[float, float]]:
@@ -105,10 +115,12 @@ def parse_plan(d: dict) -> Plan:
         ids.add(rid)
         if ("box" in r) == ("floor" in r):
             raise SchemaError(f"{where}: box 와 floor 중 하나만")
+        box = None
         if "box" in r:
             b = r["box"]
-            floor = box_to_floor(_xy(b.get("center"), where + ".box.center"),
-                                 _xy(b.get("size"), where + ".box.size"), float(b.get("yaw_deg", 0)))
+            box = {"center": _xy(b.get("center"), where + ".box.center"),
+                   "size": _xy(b.get("size"), where + ".box.size"), "yaw_deg": float(b.get("yaw_deg", 0))}
+            floor = box_to_floor(box["center"], box["size"], box["yaw_deg"])
         else:
             floor = [_xy(p, f"{where}.floor") for p in r["floor"]]
             if len(floor) < 3:
@@ -121,7 +133,7 @@ def parse_plan(d: dict) -> Plan:
         cz = r.get("ceiling_z")
         if cz is not None and float(cz) <= fz:
             raise SchemaError(f"{where}: ceiling_z 가 floor_z 보다 커야 함")
-        rooms.append(Room(rid, floor, fz, None if cz is None else float(cz), r.get("name", "")))
+        rooms.append(Room(rid, floor, fz, None if cz is None else float(cz), r.get("name", ""), box))
     if not rooms:
         raise SchemaError("plan.json: rooms 가 비어 있음")
     doors = []
