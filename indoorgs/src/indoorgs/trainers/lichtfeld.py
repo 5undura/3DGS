@@ -13,6 +13,8 @@ from pathlib import Path
 
 from .base import Preset, TrainerAdapter
 
+EVAL_EVERY = 8
+
 
 class LichtFeld(TrainerAdapter):
     name = "lichtfeld"
@@ -32,9 +34,31 @@ class LichtFeld(TrainerAdapter):
         return [exe, "-d", str(data_dir), "-o", str(out_dir),
                 f"--max-cap={self.clamp_cap(preset, gpu)}", f"--iter={preset.iters}",
                 f"--sh-degree={preset.sh}", f"--max-width={preset.width}",
-                "--bg-mode=modulation", "--export=ply", "--eval", "--test-every=8", "--headless",
+                "--bg-mode=modulation", "--export=ply", "--eval", f"--test-every={EVAL_EVERY}", "--headless",
                 *preset.extra]
 
     def find_result(self, out_dir: Path) -> Path | None:
-        plys = sorted(out_dir.rglob("splat_*.ply"), key=lambda p: int(p.stem.split("_")[-1]))
+        plys = sorted((p for p in out_dir.rglob("splat_*.ply") if p.stem.split("_")[-1].isdigit()),
+                      key=lambda p: int(p.stem.split("_")[-1]))
         return plys[-1] if plys else None
+
+    def evaluate(self, run_dir: Path, data_dir: Path) -> dict | None:
+        """<out>/metrics.csv 의 마지막(가장 큰 iteration) 줄.
+        열 이름은 v0.5.4.3 소스 src/training/metrics/metrics.hpp EvalMetrics::to_csv_header 로 확인:
+        iteration,psnr,ssim,lpips,time_per_image,num_gaussians,... (평가 장수는 csv 에 없음)"""
+        import csv
+        files = sorted(run_dir.rglob("metrics.csv"))
+        best = None
+        for f in files:
+            with f.open(encoding="utf-8", newline="") as fh:
+                for row in csv.DictReader(fh):
+                    try:
+                        it, ps, ss = int(float(row["iteration"])), float(row["psnr"]), float(row["ssim"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if best is None or it >= best[0]:
+                        best = (it, ps, ss)
+        if best is None:
+            return None
+        return {"psnr": round(best[1], 3), "ssim": round(best[2], 4), "n_eval": None,
+                "eval_every": EVAL_EVERY, "iteration": best[0]}

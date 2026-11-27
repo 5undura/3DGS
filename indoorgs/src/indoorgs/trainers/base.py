@@ -1,9 +1,10 @@
 """학습기 어댑터 규격 (CONTRACT.md 5절)."""
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from ..colmap import runner
 
 
 @dataclass
@@ -41,10 +42,19 @@ class TrainerAdapter:
     def find_result(self, out_dir: Path) -> Path | None:
         raise NotImplementedError
 
+    def evaluate(self, run_dir: Path, data_dir: Path) -> dict | None:
+        """학습 결과 평가 -> eval.json 내용 (psnr, ssim, n_eval, eval_every). 평가가 없으면 None."""
+        return None
+
     def help_text(self, exe: str) -> str:
-        r = subprocess.run([exe, "--help"], capture_output=True, text=True, timeout=60,
-                           encoding="utf-8", errors="replace")
-        return (r.stdout or "") + (r.stderr or "")
+        r = runner.run([exe, "--help"], timeout=60)
+        return r.text
+
+    @staticmethod
+    def parse_version(text: str) -> str:
+        import re
+        m = re.search(r"\bv?(\d+\.\d+(?:\.\d+){0,2})\b", text)
+        return m.group(1) if m else ""
 
     def detect(self, exe: str | None) -> TrainerInfo:
         if not exe or not Path(exe).exists():
@@ -54,7 +64,7 @@ class TrainerAdapter:
         except Exception as e:  # noqa: BLE001
             return TrainerInfo(False, message=f"{self.name}: --help 실행 실패 {e}")
         missing = [o for o in self.required_options if o not in text]
-        return TrainerInfo(True, "", missing,
+        return TrainerInfo(True, self.parse_version(text), missing,
                            f"{self.name}: 옵션 없음 {missing} (버전 확인)" if missing else "")
 
     @staticmethod
