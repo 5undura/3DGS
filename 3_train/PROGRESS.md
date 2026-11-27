@@ -19,6 +19,8 @@
 - config.ps1 (로컬): Work=`5차_실험\up`, VideoDir=`5차_실험\0_영상`, Sections 1..6, **Mapper incremental** (global 은 복도 1 에서 순간이동 100곳)
 - 진행: 추출(pick_best, --min-diff 4 --sharp-ratio 0.8) → 정합(sequential overlap 20 + loop, incremental) 백그라운드 시작 (11-27 밤)
 - 계획: 정합 끝난 구간부터 diagnose → 순간이동 사진 제외 → LichtFeld 최고 설정(80k, pose-opt, MRNF) 학습. 이후 추출·정합·학습 방식을 한 가지씩 바꿔 비교
+- 추출 결과 (pick_best): 1 12,048 / 2 6,189 / 3 4,138 / 4 1,983 / 5 2,804 / 6 6,805장 (영상이 길어 이전 1,100장보다 훨씬 많음) → 정합 전 1,500장 이하로 솎음 (ThinAbove/ThinTarget 1500, 빠진 것은 Na_skip). 정합 순서 3,4,5,6 먼저 (복도 1·2 는 팀원 PC 후보)
+- 11-28 01:06 3번 정합 시작 (4,138 → 1,380장)
 - ⚠️ 시간: 이전 복도 1 incremental 정합이 1100장에 281분. 6구간이면 이 PC 로 하루 가까이 걸릴 수 있음 → 오래 걸리면 팀원 PC 로 넘길 후보
 
 ## 정리 (11-27 저녁) — 재촬영 전 결론
