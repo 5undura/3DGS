@@ -2,13 +2,26 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+import time
 from pathlib import Path
 
 from . import config as config_mod
 from .project import Project
 from .stages.base import all_stages, run_all, status
+from .colmap import runner
 from .trainers import REGISTRY
+
+COLMAP_WANT = "4.2.1"   # pose_priors 스키마·pose_prior_mapper 옵션을 확인한 버전
+
+
+def colmap_version(exe: str) -> tuple[str, bool]:
+    """(버전, pose_prior_mapper 있음). `colmap help` 첫 줄 'COLMAP 4.2.1 (Commit ...)' 형식.
+    TODO(PC에서 확인): Windows COLMAP.bat help 출력 형식"""
+    r = runner.run([exe, "help"], timeout=60)
+    m = re.search(r"COLMAP\s+(\d+\.\d+(?:\.\d+)?)", r.text)
+    return (m.group(1) if m else ""), ("pose_prior_mapper" in r.text)
 
 TEMPLATE = """\
 # IndoorGS 프로젝트 설정. 형식은 indoorgs/CONTRACT.md
@@ -46,12 +59,22 @@ def cmd_check(a) -> int:
     for w in p.warnings():
         print("경고:", w)
     t = p.cfg.tools
-    print(f"COLMAP   : {'있음' if t.colmap and Path(t.colmap).exists() else '없음'}  {t.colmap}")
-    bad += not (t.colmap and Path(t.colmap).exists())
+    has_colmap = bool(t.colmap and Path(t.colmap).exists())
+    extra = ""
+    if has_colmap:
+        ver, ppm = colmap_version(t.colmap)
+        extra = f" 버전 {ver or '?'}"
+        if ver and ver != COLMAP_WANT:
+            extra += f" (확인한 버전은 {COLMAP_WANT}: pose_priors 형식이 다를 수 있음)"
+        if not ppm:
+            extra += " / pose_prior_mapper 못 찾음 (도면 위치 제약은 mapper 로 대신)"
+    print(f"COLMAP   : {'있음' if has_colmap else '없음'}  {t.colmap}{extra}")
+    bad += not has_colmap
     for name, ad in REGISTRY.items():
         info = ad.detect(getattr(t, name))
         mark = "있음" if info.found and not info.missing_options else ("옵션 부족" if info.found else "없음")
-        print(f"{name:9}: {mark}  {getattr(t, name)}  {info.message}")
+        ver = f" (버전 {info.version})" if info.version else ""
+        print(f"{name:9}: {mark}{ver}  {getattr(t, name)}  {info.message}")
         if name == p.cfg.train.trainer and mark != "있음":
             bad += 1
     if p.cfg.train.preset not in REGISTRY[p.cfg.train.trainer].presets():
@@ -78,11 +101,38 @@ def cmd_status(a) -> int:
     return 0
 
 
+def _todo(p: Project, section: str | None, until: str | None) -> list[tuple[str, str]]:
+    names = [s.name for s in all_stages()]
+    last = names.index(until) if until else len(names) - 1
+    return [(sec, st) for sec, st, state in status(p)
+            if state == "todo" and names.index(st) <= last and (section is None or sec in (section,))]
+
+
+def progress_echo(total: int, out=print):
+    """run_all 의 로그 줄을 받아 '[2/7 +00:12:34]' 를 붙여 출력. '<단계>: 시작' 줄마다 번호가 하나씩 오름."""
+    t0 = time.time()
+    n = [0]
+    pat = re.compile(r"\] (\w+): 시작$")
+
+    def echo(line: str):
+        if pat.search(line):
+            n[0] += 1
+        el = int(time.time() - t0)
+        out(f"[{min(n[0], total) if total else n[0]}/{total} +{el // 3600:02d}:{el % 3600 // 60:02d}:{el % 60:02d}] {line}")
+    return echo
+
+
 def cmd_run(a) -> int:
     p = Project(a.folder)
     for w in p.warnings():
         print("경고:", w)
-    return 0 if run_all(p, only_section=a.section, until=a.until) else 1
+    todo = _todo(p, a.section, a.until)
+    print(f"할 단계 {len(todo)}개: " + (", ".join(f"{s}/{st}" for s, st in todo) or "없음"))
+    ok = run_all(p, only_section=a.section, until=a.until, echo=progress_echo(len(todo)))
+    print()
+    cmd_status(a)
+    print("결과:", "성공" if ok else "실패 (logs/ 확인)")
+    return 0 if ok else 1
 
 
 def main(argv=None) -> int:

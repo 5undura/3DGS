@@ -10,6 +10,8 @@ from pathlib import Path
 
 from .base import Preset, TrainerAdapter
 
+EVAL_EVERY = 8   # 8장마다 1장 평가 (복도 1 실험들과 같음)
+
 
 class Brush(TrainerAdapter):
     name = "brush"
@@ -27,9 +29,27 @@ class Brush(TrainerAdapter):
                 "--max-splats", str(self.clamp_cap(preset, gpu)), "--sh-degree", str(preset.sh),
                 "--max-resolution", str(preset.width), "--total-steps", str(preset.iters),
                 "--export-every", str(preset.iters), "--export-path", str(out_dir),
-                "--eval-split-every", "8", "--eval-every", str(preset.iters), "--eval-save-to-disk",
+                "--eval-split-every", str(EVAL_EVERY), "--eval-every", str(preset.iters), "--eval-save-to-disk",
                 *preset.extra]
 
     def find_result(self, out_dir: Path) -> Path | None:
-        plys = sorted(out_dir.glob("export_*.ply"), key=lambda p: int(p.stem.split("_")[-1]))
+        plys = sorted((p for p in out_dir.glob("export_*.ply") if p.stem.split("_")[-1].isdigit()),
+                      key=lambda p: int(p.stem.split("_")[-1]))
         return plys[-1] if plys else None
+
+    def evaluate(self, run_dir: Path, data_dir: Path) -> dict | None:
+        """Brush CLI 는 점수를 안 냄 -> --eval-save-to-disk 가 남긴 eval_<iter>/*.png 를 원본과 비교
+        (저장소 tools/eval_renders.py 방식). 폴더 이름은 3_train/brush_eval.ps1 기준.
+        TODO(PC에서 확인): Brush 0.3.0 의 평가 렌더 폴더·파일 이름 (eval_<iter>/<사진이름>.png)"""
+        from .metrics import compare_dir
+        dirs = [d for d in run_dir.glob("eval_*") if d.is_dir() and d.name.split("_")[-1].isdigit()]
+        if not dirs:
+            return None
+        last = max(dirs, key=lambda d: int(d.name.split("_")[-1]))
+        rows = compare_dir(last, data_dir / "images")
+        if not rows:
+            return None
+        return {"psnr": round(sum(r[1] for r in rows) / len(rows), 3),
+                "ssim": round(sum(r[2] for r in rows) / len(rows), 4),
+                "n_eval": len(rows), "eval_every": EVAL_EVERY, "iteration": int(last.name.split("_")[-1]),
+                "worst": [r[0] for r in sorted(rows, key=lambda r: r[1])[:8]]}

@@ -29,8 +29,8 @@ def test_prior_stage_runs_on_demo(tmp_path):
     assert st[("room_b117", "prior")] == "todo"
     assert st[("corridor1", "prior")] == "skip"          # 동선 없음
     ok = run_all(p, only_section="room_b117", echo=None)
-    assert not ok                                          # register 는 아직 구현 안 됨
+    assert not ok                                          # COLMAP 경로가 없어 register 실패
     pri = json.loads((root / "sections" / "room_b117" / "colmap" / "priors.json").read_text(encoding="utf-8"))
     assert len(pri["frames"]) == 10
     log = (root / "logs" / "room_b117_register.log").read_text(encoding="utf-8")
-    assert "아직 구현 안 됨" in log
+    assert "COLMAP 없음" in log
