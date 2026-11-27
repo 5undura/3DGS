@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["fastapi>=0.110", "uvicorn>=0.29"]
+gui = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]   # multipart: 도면 업로드
 space = ["ezdxf>=1.1"]          # DXF 도면 불러오기 (space/dxf_import.py)
 fill = ["scipy>=1.10"]          # fill·merge: cKDTree(구멍 고르기, ICP), ndimage(평면도 격자)
 all = ["indoorgs[gui,space,fill]"]

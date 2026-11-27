@@ -4,6 +4,8 @@ API (모두 /api 아래)
   GET  project                      설정 요약, 구간 목록
   GET  plan / PUT plan              floorplan/plan.json (잘못되면 400 + 한국어 메시지)
   GET  plan/image                   floorplan/plan.png
+  POST plan/import                  도면 업로드(.dxf .svg 사진) -> 초안 (plan.json 은 안 씀)
+  GET  plan/validate / POST         저장된(또는 보낸) plan 검사 -> issues
   GET  sections/{name}/path / PUT   sections/<name>/path.json
   GET  sections/{name}/video        project.yaml 의 영상 (Range 지원)
   GET  status                       구간 × 단계 (done/todo/skip/running/fail)
@@ -22,13 +24,16 @@ import threading
 from collections import deque
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Request
+import json
+
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import schemas
 from ..project import Project
 from ..stages.base import StageContext, all_stages, run_all, status
+from . import plan_import
 
 STATIC = Path(__file__).parent / "static"
 LOG_NAME = re.compile(r"^[A-Za-z0-9_\-]+\.log$")
@@ -164,7 +169,37 @@ def create_app(project_root: str | Path) -> FastAPI:
 
     @app.put("/api/plan")
     def put_plan(data: dict = Body(...)):
-        return put_json(proj().plan_json, data, schemas.parse_plan, "plan.json")
+        out = put_json(proj().plan_json, data, schemas.parse_plan, "plan.json")
+        out["issues"] = plan_import.validate_plan(data)       # 저장은 막지 않고 알려만 줌
+        return out
+
+    @app.get("/api/plan/validate")
+    def validate_saved():
+        p = proj()
+        if not p.plan_json.exists():
+            raise HTTPException(404, "plan.json 없음")
+        return {"issues": plan_import.validate_plan(schemas.read_json(p.plan_json))}
+
+    @app.post("/api/plan/validate")
+    def validate_body(data: dict = Body(...)):
+        return {"issues": plan_import.validate_plan(data)}
+
+    @app.post("/api/plan/import")
+    async def import_plan(file: UploadFile = File(...), options: str = Form("{}")):
+        """options(JSON): px_per_m, scale_m, scale_points, corners, size_m, save_png, recenter, min_area, snap_tol"""
+        try:
+            opt = json.loads(options or "{}")
+            if not isinstance(opt, dict):
+                raise ValueError
+        except ValueError:
+            raise HTTPException(400, "options 는 JSON 객체여야 함")
+        data = await file.read()
+        try:
+            return plan_import.run_import(proj().plan_json.parent, file.filename or "plan", data, opt)
+        except plan_import.ImportError_ as e:
+            raise HTTPException(400, str(e))
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f"옵션 오류: {e}")
 
     @app.get("/api/plan/image")
     def plan_image():

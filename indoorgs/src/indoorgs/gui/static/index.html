@@ -46,6 +46,8 @@
         </div>
         <button id="space-add">방 추가</button>
         <button id="space-del" title="선택한 것 지우기 (Delete)">삭제</button>
+        <button id="space-import" title="DXF · SVG · 도면 사진에서 방 초안 만들기">도면 불러오기</button>
+        <input type="file" id="space-file" accept=".dxf,.svg,.png,.jpg,.jpeg,.bmp,.webp,.tif,.tiff" hidden>
         <span class="sep"></span>
         <label class="chk"><input type="checkbox" id="space-snap" checked> 스냅 0.1m</label>
         <button id="space-fit">전체 보기</button>
@@ -56,12 +58,20 @@
       </div>
       <div class="canvas-wrap">
         <canvas id="space-canvas"></canvas>
+        <div id="space-photo" class="photo hidden">
+          <div class="photo-bar small"><span id="space-photo-msg"></span><span class="grow"></span>
+            <button id="space-photo-reset">점 다시</button></div>
+          <div class="photo-box"><div class="photo-inner"><img id="space-photo-img" alt="도면 사진"><svg id="space-photo-svg"></svg></div></div>
+        </div>
         <div id="space-3d-wrap" class="view3d hidden"><div id="space-3d-msg" class="muted"></div></div>
         <div class="hint" id="space-hint">끌기: 이동 · 모서리: 크기 · 위 동그라미: 회전 · 휠: 확대 · 빈 곳 끌기: 화면 이동</div>
       </div>
     </div>
     <aside class="side">
+      <div id="space-import-panel" class="hidden"></div>
       <div id="space-props"><p class="muted">방이나 문을 선택하세요.</p></div>
+      <h3>검사</h3>
+      <div id="space-issues"><p class="muted small">-</p></div>
       <h3>도면 이미지</h3>
       <div id="space-bg"></div>
     </aside>

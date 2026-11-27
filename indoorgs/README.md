@@ -43,3 +43,4 @@ PYTHONPATH=src python -m pytest -q
 - 로컬 웹(FastAPI) 화면 4개: 프로젝트 / 공간(박스 편집 + 3D 미리보기, 브러시 동선, 영상 보며 고정점 찍기) / 실행 / 결과
 - 처음엔 `examples/demo` 를 가짜 데이터로 화면부터, 그다음 `stages.base.status`·`run_all` 연결
 - 완료 기준: demo 프로젝트에서 박스를 옮기고 동선을 그려 저장하면 plan.json·path.json 이 계약 형식으로 바뀜
+- 2차(E): 공간 화면 "도면 불러오기"(DXF·SVG·사진 → 초안 미리보기 → 바꾸기/추가하기, 원본은 `floorplan/source/`), 오른쪽 검사 목록(`/api/plan/validate`), 방을 옮기면 그 방 벽의 문이 따라감, 배경 정렬은 `source.image_align`
