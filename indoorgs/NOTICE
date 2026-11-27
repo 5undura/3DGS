@@ -16,5 +16,10 @@ core/splatcore/repair.py: _donors_from_rim, the per-cell density of the rim,
 optical-depth deficit from _scale_opacity, _cells, and the whole-donor copy
 principle). The header of that file lists what was taken and how it was changed.
 
+Adapted ideas in src/indoorgs/walls/cleanup.py (floater removal from core/splatcore/cleanup.py:
+isolation counts only together with low opacity or large size, and the "detached" small
+connected-component test from _detached, re-implemented on a voxel graph with smaller limits).
+The header of that file lists what was taken and how it was changed.
+
 The full text of the Apache License, Version 2.0 is in licenses/Apache-2.0.txt
 (also available at http://www.apache.org/licenses/LICENSE-2.0).
