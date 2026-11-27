@@ -95,3 +95,4 @@ Brush 에서 쓸 수 있는 관련 옵션: `--scale-loss-weight`(크기 벌점),
 | 11-27 | 1 복도 | 학습기만 바꿈: LichtFeld v0.5.4.3 (순간이동 제외판, MCMC 300만, 1920, SH2, 30,000, PPISP, 배경 변조, 8장마다 1장 평가) | 300만 | **96.2%** | 25.62 / 0.863 (같은 평가 133장: Brush 25.75), 정렬 후 27.14 | 23분 | `F:\Sample\4차\up\1c_lfs_origskip` |
 | 11-27 | 1 복도 | 위 LichtFeld + `--pose-opt` | 300만 | 96.4% | **25.90** / 0.869 (같은 133장: 25.62 → 25.90, 사진 74% 개선), 정렬 후 27.11, 어긋남 2.0→1.4px | 45분 | `F:\Sample\4차\up\1c_lfs_origskip_poseopt` |
 | 11-27 | 1 복도 | 위 + `--strategy=mrnf` (MCMC 대신, PPISP 유지 위해 `--no-exposure-correction`) | 300만 | **63.3%** (바늘형>10배 1.3%) | **26.51** / 0.879 (같은 133장: 25.90 → 26.51, 사진 84% 개선), 정렬 후 27.88 | 37분 | `F:\Sample\4차\up\1c_lfs_origskip_poseopt_mrnf` |
+| 11-27 | 1 복도 | 위에서 노출 보정만 PPISP → `--exposure-correction` (v0.5.4.3 기본) | 300만 | 60.9% | 26.52 / 0.879 (같은 133장: 26.51 → 26.52, 차이 없음), 정렬 후 27.87 | 42분 | `F:\Sample\4차\up\1c_lfs_poseopt_mrnf_expcorr` |

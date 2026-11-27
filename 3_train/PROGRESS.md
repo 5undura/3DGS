@@ -10,7 +10,7 @@
 - [x] 2단계 재정합 (sequential + loop, global / incremental) → global 못 씀, **incremental 이 원래보다 나음** (아래 표)
 - [x] 3단계 Brush 2560 → 1920 과 PSNR 같음 (해상도는 병목 아님)
 - [x] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
-- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 방식) 진행 중
+- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 PPISP → exposure-correction) 차이 없음. L4(2560) 진행 중
 
 ## 도구 확인 (2026-11-27)
 | 도구 | 버전 | train_all / register_all 옵션 대조 |
@@ -110,3 +110,7 @@
   - MRNF 는 v0.5.4.3 기본 `--exposure-correction` 이 켜지는데 `--ppisp` 와 같이 못 씀 (첫 시도 즉시 실패) → 한 가지만 바꾸려고 `--no-exposure-correction` 추가
   - **지금까지 최고 결과**: `F:\Sample\4차\up\1c_lfs_origskip_poseopt_mrnf\splat_30000.ply` → VR/SuperSplat 확인 대상
   - 다음: L3 = L2 에서 PPISP → `--exposure-correction`(사진별 노출·WB + 국소 격자, v0.5.4.3 기본) 으로 바꿈. `lfs_eval.ps1 -NoPpisp`
+- L3 (L2 에서 PPISP → `--exposure-correction`): 26.52 / 0.879, L2 와 같음 (+0.02). 반투명 63.3 → 60.9%. 42분
+  - 노출 보정 방식은 결과에 거의 영향 없음 → 앞으로 v0.5.4.3 기본값인 exposure-correction 을 기준으로 씀 (`lfs_eval.ps1 -NoPpisp -Extra --pose-opt,--strategy=mrnf`)
+  - 참고: lfs_eval.ps1 은 `--strategy=mcmc` 를 먼저 넣고 Extra 의 `--strategy=mrnf` 가 뒤에서 덮어씀 (결과 통계로 MRNF 적용 확인: 바늘형 1.3%)
+  - 다음: L4 = L3 + 해상도 2560 (Brush 에서는 효과 없었지만 자세 보정이 생겨 다를 수 있음)
