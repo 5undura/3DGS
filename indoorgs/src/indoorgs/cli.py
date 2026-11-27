@@ -48,7 +48,15 @@ def cmd_init(a) -> int:
         return 1
     for d in ("floorplan", "sections", "merged", "logs"):
         (root / d).mkdir(parents=True, exist_ok=True)
-    cfg.write_text(TEMPLATE, encoding="utf-8")
+    from . import tools_detect as td   # 도구 자동 찾기 (PATH, C:/tools, --search 폴더)
+    found = td.best(td.find_tools(getattr(a, "search", None) or []))
+    text = TEMPLATE
+    for name, line in (("colmap", "  colmap: C:/tools/colmap/COLMAP.bat"), ("brush", "  brush: C:/tools/brush/brush_app.exe"),
+                       ("lichtfeld", "  lichtfeld: null")):
+        if found[name]:
+            text = text.replace(line, f"  {name}: {td.yaml_path(found[name])}", 1)
+        print(f"{name:9}: {'찾음 ' + found[name] if found[name] else '못 찾음 (project.yaml 에 직접 적기)'}")
+    cfg.write_text(text, encoding="utf-8")
     print(f"만듦: {cfg}  -> 도구 경로와 sections 를 고친 뒤 `indoorgs check {root}`")
     return 0
 
@@ -85,6 +93,12 @@ def cmd_check(a) -> int:
         bad += not ok
         print(f"영상 {sec.name:12}: {'있음' if ok else '없음'}  {sec.video}")
     print(f"공간(plan.json): {'있음' if p.has_space else '없음 (공간 기능 꺼짐)'}")
+    from . import tools_detect as td
+    conf = {n: getattr(t, n) for n in td.TOOL_FILES}
+    roots = (getattr(a, "search", None) or []) + td.roots_from_config(conf.values())
+    for n, others in td.other_candidates(td.find_tools(roots), conf).items():
+        for o in others:
+            print(f"자동으로 찾은 다른 후보 {n:9}: {o}")
     return 1 if bad else 0
 
 
@@ -145,7 +159,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="indoorgs", description="실내 공간 원클릭 3DGS")
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("init", help="새 프로젝트 폴더와 project.yaml 만들기"); s.add_argument("folder"); s.set_defaults(f=cmd_init)
+    s.add_argument("--search", action="extend", nargs="+", default=[], help="도구를 찾을 폴더 (예: F:/Sample/tools), 깊이 4")
     s = sub.add_parser("check", help="도구·영상·설정 점검"); s.add_argument("folder"); s.set_defaults(f=cmd_check)
+    s.add_argument("--search", action="extend", nargs="+", default=[], help="다른 후보를 찾을 폴더")
     s = sub.add_parser("status", help="구간 × 단계 진행 상황"); s.add_argument("folder"); s.set_defaults(f=cmd_status)
     s = sub.add_parser("run", help="끝나지 않은 단계를 순서대로 실행")
     s.add_argument("folder"); s.add_argument("--section"); s.add_argument("--until", help="이 단계까지만")

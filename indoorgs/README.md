@@ -2,18 +2,26 @@
 
 실내 공간 영상을 버튼 한 번으로 한 건물 좌표의 3DGS(PLY)로 만드는 도구. 계획: [`docs/IndoorGS_PLAN.md`](../docs/IndoorGS_PLAN.md), 약속(폴더·파일 형식·함수 모양): [`CONTRACT.md`](CONTRACT.md).
 
-지금 상태: **설계 0단계 끝** (계약 고정, 코드 틀, 동선 → 위치 생성 구현, 테스트 23개). 추출·정합·학습 등은 아직 빈 틀.
+**설치·사용법: [`docs/USAGE.md`](docs/USAGE.md)** (Windows, 더블클릭 `windows/install.bat` → `new_project.bat` → `IndoorGS.bat`).
+실제 PC 에서 확인할 것: [`docs/PC_CHECKLIST.md`](docs/PC_CHECKLIST.md).
 
+지금 상태 (2026-11-27): **1차 4명(A 코어·CLI, B 공간, C 보강·합치기, D GUI) 작업이 합쳐짐**, 2차(E GUI↔공간 도구, F SH 회전·재실행, G 설치·문서) 진행 중.
+- 추출 → 동선 위치 → 정합 → 진단 → 학습(Brush·LichtFeld) → 보강 → 합치기 → 보고서 단계가 모두 코드로 있음
+- 로컬 웹 화면 5개(프로젝트·공간·동선·실행·결과), 도구 자동 찾기(`init`·`check`), Windows 더블클릭 bat
+- 테스트 137개 통과 (리눅스, 가짜 COLMAP·학습기). **실제 촬영 데이터·Windows 도구로는 아직 끝까지 안 돌려 봄**
+
+개발자용 (터미널):
 ```
-pip install -e ".[dev]"
-indoorgs init D:/scan/student_hall      # project.yaml 만들기
-indoorgs check D:/scan/student_hall     # 도구·영상 점검
-indoorgs status D:/scan/student_hall    # 구간 × 단계 표
+pip install -e ".[all,dev]"                       # 또는 windows/install.bat (.venv)
+indoorgs init D:/scan/student_hall --search F:/Sample/tools   # project.yaml, 도구 자동 찾기
+indoorgs check D:/scan/student_hall               # 도구·영상 점검, 다른 후보
+indoorgs status D:/scan/student_hall              # 구간 × 단계 표
 indoorgs run D:/scan/student_hall [--section room_b117] [--until register]
-python -m pytest
+indoorgs gui D:/scan/student_hall --open          # 로컬 웹 화면
+PYTHONPATH=src python -m pytest -q
 ```
 
-## 에이전트 작업 (병렬)
+## 에이전트 작업 (1차, 병렬 — 끝나서 합쳐짐)
 
 각 에이전트는 자기 파일만 고치고, 다른 모듈과는 CONTRACT.md 4절의 파일로만 주고받는다. 브랜치 `indoorgs`.
 

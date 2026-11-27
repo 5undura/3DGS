@@ -1,0 +1,96 @@
+# IndoorGS 사용법 (Windows)
+
+**요약**: `windows\install.bat` 한 번 → `windows\new_project.bat` 로 프로젝트 만들기 → `project.yaml` 에 영상 적기 → `windows\IndoorGS.bat` 에서 공간·동선 → **전체 실행** → 결과 화면.
+터미널 없이 더블클릭만으로 됩니다. 아직 실제 촬영 데이터로 처음부터 끝까지 돌려 보지 않았습니다(→ [PC_CHECKLIST.md](PC_CHECKLIST.md)).
+
+## 1. 설치
+
+먼저 있어야 하는 것 (직접 설치. IndoorGS 는 시스템에 아무것도 설치하지 않음):
+- Python 3.10 이상 (설치할 때 "Add python.exe to PATH" 체크)
+- COLMAP 4.2.1 이상 Windows CUDA 빌드 (`COLMAP.bat`)
+- Brush 0.3.0 (`brush_app.exe`) — 기본 학습기
+- (선택) LichtFeld Studio v0.5.4.3 — 고화질. 빌드 방법: [3_train/LICHTFELD_SETUP.md](../../3_train/LICHTFELD_SETUP.md)
+
+그다음 `indoorgs\windows\install.bat` 더블클릭.
+- 저장소 폴더에 `.venv` (이 도구 전용 Python 환경)를 만들고 IndoorGS 와 필요한 패키지(GUI, DXF, scipy)를 그 안에만 설치
+- 다시 실행하면 `.venv` 는 그대로 두고 패키지만 갱신. 꼬이면 `.venv` 폴더를 지우고 다시 실행
+- `.venv` 는 git 에 안 올라감 (GitHub Desktop 변경 목록에도 안 보임)
+
+## 2. 새 프로젝트
+
+`windows\new_project.bat` 더블클릭 → 이름 입력 (예: `student_hall`).
+- 이름만 쓰면 `%USERPROFILE%\IndoorGS_projects\<이름>`, 전체 경로(`D:\scan\student_hall`)도 됨. **영문 경로 권장**
+- COLMAP·Brush·LichtFeld 를 자동으로 찾아 `project.yaml` 에 적음. 찾는 곳: PATH, `C:\tools`, `%LOCALAPPDATA%`·`Program Files` 의 도구 이름 폴더, bat 맨 위 `SEARCH` 폴더(기본 `F:\Sample\tools`, 깊이 4). 여러 개면 가장 최근 파일
+- 도구가 다른 곳에 있으면 메모장으로 `new_project.bat` 을 열어 맨 위 `SEARCH`·`PROJECTS` 를 고치면 됨
+
+## 3. 영상 넣기
+
+`new_project.bat` 이 메모장으로 `project.yaml` 을 엽니다. `sections:` 아래에 구간마다 이름과 영상:
+
+```yaml
+sections:
+  - name: corridor1          # 영문·숫자·_·- (폴더 이름이 됨)
+    video: F:/Sample/4차/up/1.MP4
+  - name: room_b117
+    video: F:/Sample/4차/up/2.MP4
+train: {trainer: brush, preset: default}     # 고화질: trainer: lichtfeld
+```
+저장하고 메모장을 닫으면 `indoorgs check` 결과가 나옵니다 (도구·영상 있음/없음, 자동으로 찾은 다른 후보).
+GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있습니다.
+
+학습 프리셋:
+- Brush `default` = 기준선(1920, 300만, SH2, 30,000회, 복도 1 약 36분), `fast` = 점검용 5,000회
+- LichtFeld `default` = 복도 1 최고 설정(MRNF + 자세 보정, 80,000회, 약 91분), `quick` = 30,000회(약 42분), `fast` = 점검용
+
+## 4. 화면 열기
+
+`windows\IndoorGS.bat` 위에 프로젝트 폴더를 끌어다 놓기 (또는 더블클릭 후 폴더를 창에 끌어다 놓고 Enter).
+브라우저에 로컬 화면(`http://127.0.0.1:8765/`)이 열립니다. 끄려면 검은 창을 닫기.
+
+## 5. 공간 만들기 (선택, 권장)
+
+**공간** 화면. 공간이 있으면 정합을 도면 좌표에 맞추고, 구간 합치기도 변환 없이 됩니다.
+- **방 추가** → 끌어서 이동·크기·회전, **문 추가** → 벽 클릭. 단위는 미터
+- 도면 사진이 있으면 `floorplan\plan.png` 로 넣어 배경으로 깔고 그 위에 박스를 맞춤
+- DXF·SVG 도면·도면 사진에서 방 불러오기: 코드는 있음(`space/`), 화면 버튼은 연결 작업 중
+- **저장** → `floorplan\plan.json`
+
+## 6. 동선 그리기 (선택)
+
+**동선** 화면 → 구간 고르기 → **브러시**로 걸은 길을 그림 → 영상을 보며 모퉁이·문에서 **고정점**(그 시각의 위치) 찍기 → **저장**.
+공간과 동선이 둘 다 있으면 프레임별 예상 위치를 COLMAP 에 함께 줘서 흰 벽·어두운 복도에서 정합이 덜 틀어집니다.
+영상이 화면에서 재생되지 않으면 아래 문제 해결 참고.
+
+## 7. 실행
+
+**실행** 화면 → **전체 실행** (또는 구간별, "~까지"로 중간에서 멈추기).
+순서: 프레임 추출 → (동선 위치) → 정합 → 진단(순간이동 사진 빼기) → 학습 → 보강(바닥·천장 구멍) → 합치기 → 보고서.
+- 끝난 단계는 다시 안 돌림. 중간에 꺼도 다음에 이어서 실행
+- 로그는 화면 아래, 파일은 `logs\<구간>_<단계>.log`
+- 학습 시간(3060 Ti, 복도 1): Brush default 약 36분, LichtFeld default 약 1.5시간. 추출·정합은 따로
+
+## 8. 결과 확인
+
+- **결과** 화면 = `report.html`: 구간별 프레임 수, 정합 장수, PSNR, 반투명 비율, 도면 위 카메라 위치
+- 구간 PLY: `sections\<구간>\train\<학습기>_<프리셋>\splat.ply`, 구멍 메운 것 `sections\<구간>\fill\holes_backdrop.ply`
+- 건물 하나: `merged\building.ply`
+- 보기: [SuperSplat](https://superspl.at/editor) 에 PLY 끌어다 놓기 (브라우저, 무료). VR 은 Unity(AVT 저장소)에서
+
+## 문제 해결
+
+- **한글 경로**: COLMAP 은 한글 경로에서 됨(확인함). 그래도 예전에 OpenCV·일부 도구가 조용히 실패한 적이 있어 **프로젝트는 영문 경로** 권장
+- **COLMAP 옵션 오류**: `indoorgs check` 가 버전과 `pose_prior_mapper` 유무를 보여 줌. 4.2.1 이 아니면 옵션 이름이 다를 수 있음 → 최신 4.x 로. 오프라인이면 sequential 매칭의 loop_detection 이 어휘 트리를 못 받아 실패할 수 있음 → `project.yaml` 의 `register: {loop_detection: false}`
+- **LichtFeld 없음/빌드 실패**: [LICHTFELD_SETUP.md](../../3_train/LICHTFELD_SETUP.md). VS **2022** + "C++ Clang Compiler for Windows", CUDA 12.8. 빌드용 bat 에 한글 금지. 3060 Ti 에서 빌드한 exe 는 5070 PC 에서 안 돌 수 있음(`"86;120"` 으로 다시 빌드). Visual Studio·CUDA 설치는 직접 결정
+- **Brush 반투명 경고**: 보고서에서 반투명 비율 80% 이상이면 VR 에서 벽이 비칠 수 있음 (Brush 기준선 복도 1 = 86.9%). LichtFeld `default` 는 49.4% → 가능하면 LichtFeld
+- **실패한 단계**: 출력 폴더가 `<이름>_failed_<시각>` 으로 옆에 치워지고 원본은 그대로. 로그를 보고 고친 뒤 다시 실행. 실패 폴더는 확인 후 직접 지워도 됨
+- **영상이 화면에서 재생 안 됨**: Osmo Pocket 3 의 HEVC(10bit)는 브라우저가 못 틀 수 있음. 처리에는 문제없고 동선 화면 미리보기만 안 됨. 미리보기용 H.264 사본:
+  (`F:\Sample\tools\ffmpeg_tool` 안의 ffmpeg.exe) `ffmpeg.exe -i 1.MP4 -vf scale=1920:-2 -c:v libx264 -crf 23 -an 1_preview.mp4` (원본은 그대로 두고 새 파일)
+- **화면이 안 열림**: 검은 창의 주소를 브라우저에 직접 입력. 포트가 쓰이고 있으면 다른 IndoorGS 창을 닫기
+
+## 촬영 팁 (복도 1 진단 결론)
+
+- **천천히** 걷기. 빠르면 자세가 튀는 사진(순간이동)이 생김 (복도 1: 25장)
+- **빠른 회전 피하기**. 방향 바꿀 때는 걸음을 멈추고 천천히 돌기
+- **모퉁이·문 앞에서 2초 멈춤**, 모퉁이는 겹치게 여러 번 지나가기 → 구간 연결·동선 고정점 찍기 쉬움
+- **바닥이 화면에 충분히** 들어오게 (조금 아래를 향하게). 안 그러면 바닥 구멍
+- 노출이 흔들리면(밝기 53~187) Brush 는 보정 못 함 → LichtFeld(노출 보정 기본)
