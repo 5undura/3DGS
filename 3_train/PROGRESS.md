@@ -10,7 +10,7 @@
 - [x] 2단계 재정합 (sequential + loop, global / incremental) → global 못 씀, **incremental 이 원래보다 나음** (아래 표)
 - [x] 3단계 Brush 2560 → 1920 과 PSNR 같음 (해상도는 병목 아님)
 - [x] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
-- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L0(pose-opt 없음) 끝, L1(pose-opt) 진행 중
+- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) **+0.28, 지금까지 최고 25.90**. 반투명 96% 가 남은 문제 → L2(mrnf) 진행 중
 
 ## 도구 확인 (2026-11-27)
 | 도구 | 버전 | train_all / register_all 옵션 대조 |
@@ -102,3 +102,7 @@
 - L0 (pose-opt 없음): 25.62 / 0.863, 같은 133장에서 Brush 25.75 와 거의 같음. 23분 (Brush 36분보다 빠름)
   - **정렬 후 PSNR 27.14**: 렌더를 사진에 맞춰 옮기면 +1.5 → 평가 사진 렌더가 중앙 2.0px(최대 53.8px) 어긋나 있음 = **자세 오차가 실제로 있음**
   - 반투명 96.2% (Brush 86.9%) → VR 비침에는 더 나쁨. MCMC 특성으로 보임
+- L1 (`--pose-opt`): **25.90 / 0.869**, 같은 133장 L0 대비 +0.28 (74% 사진 개선), 평가 렌더 어긋남 중앙 2.0 → 1.4px. 45분 (2배 느림)
+  - **자세 보정이 효과 있음 = 복도 PSNR 의 원인 중 하나가 자세 오차였음** (QUALITY_PLAN 1단계 결론)
+  - 평가 사진(8장마다 1장)은 학습에서 빠져 자세가 보정되지 않으므로 실제 개선은 더 클 수 있음
+  - 반투명 96.4% 그대로 → 다음: L2 = L1 + `--strategy=mrnf` (v0.5.4.3 기본 전략, MCMC 대신)
