@@ -9,7 +9,7 @@
 - [ ] 1단계 자세 확인 — **LichtFeld 없음 → 막힘** (아래 시행착오)
 - [x] 2단계 재정합 (sequential + loop, global / incremental) → global 못 씀, **incremental 이 원래보다 나음** (아래 표)
 - [x] 3단계 Brush 2560 → 1920 과 PSNR 같음 (해상도는 병목 아님)
-- [x] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
+- [x] 빈 곳 채우기 (tools/fill, `up\prev_1\1b` 기준) → `up\prev_1\1c\brush_fill\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
 - [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 PPISP → exposure-correction) 차이 없음. L4(2560) 더 나쁨(-0.11) → 1920 유지. L5(400만) 차이 없음 → 300만 유지. L6(50,000회) 26.70 / 55.7%, **L7(80,000회) 26.79 / 반투명 49.4% = 지금까지 최고**. L8(120,000회)은 재촬영 때문에 중단(중간물 삭제)
 
 ## 정리 (11-27 저녁) — 재촬영 전 결론
@@ -20,7 +20,7 @@
 - 결과: Brush 기준선 25.75 / 반투명 86.9% → **26.79 / 49.4%** (같은 평가 133장). 91분 (3060 Ti)
 - 효과 있었던 것: `--pose-opt` +0.28, MRNF +0.60 (반투명 96→63%), 학습 횟수 30k→80k +0.27 (반투명 61→49%)
 - 효과 없었던 것: 2560 해상도(-0.11, Brush·LichtFeld 둘 다), 상한 400만(+0.02, 반투명 늘어남), PPISP vs exposure-correction(같음), incremental 재정합(Brush 기준 더 나쁨), 전체 backdrop(흐려짐)
-- 바닥 구멍: `tools/fill/fill_section.py` → `merge_holes.py <out> <학습.ply> <backdrop.ply> 1.0 3` (벽 바탕층 제외, 바닥·천장 구멍만). 결과 `up\1c_lfs_poseopt_mrnf_expcorr_fill\holes_backdrop_80k.ply` — VR 확인 필요
+- 바닥 구멍: `tools/fill/fill_section.py` → `merge_holes.py <out> <학습.ply> <backdrop.ply> 1.0 3` (벽 바탕층 제외, 바닥·천장 구멍만). 결과 `up\prev_1\1c\L7_fill\holes_backdrop_80k.ply` — VR 확인 필요
 - 남은 후보: 120,000회(반투명이 계속 주는지), 다른 구간에 같은 설정
 
 **재촬영본 돌리는 순서** (새 영상은 `$Work` 또는 `$VideoDir` 에, 기존 `4차` 폴더는 건드리지 않음)
@@ -32,6 +32,20 @@
 **촬영 때 참고 (복도 1 진단에서 나온 문제)**: 순간이동(자세가 튀는 사진) 25장, 평가 렌더 어긋남 중앙 2px, 바닥 구멍
 → 천천히 걷고 빠른 회전 피하기, 모퉁이에서 겹치게 여러 번, 바닥이 화면에 충분히 들어오게
 
+## 폴더 정리 (11-27 저녁) — 이전 촬영본은 `up\prev_1` 로, 재촬영본은 `up\1a, 1b, 1c_*` 로
+| 예전 이름 (`up\` 아래) | 지금 (`up\prev_1\` 아래) | 내용 |
+|---|---|---|
+| 1a | 1a | 프레임 1100장 |
+| 1b_origskip | **1b** | 원래 정합(4차 1b) − 순간이동 25장. 지금까지 쓴 정합. data_fill = 바닥 메우기 sparse |
+| 1b (11-27 새벽에 1b_global_skip 으로 바꿈) | 1b_global_skip | global 재정합, 못 씀 |
+| inc\1b | 1b_inc_skip | incremental 재정합 (Brush 기준 더 나쁨) |
+| 1c_brush_orig / 1c_brush_origskip / _2560 / inc\1c_brush / 1c_fill_origskip | 1c\brush_orig / **brush (기준선)** / brush_2560 / brush_inc / brush_fill | Brush 결과 |
+| 1c_lfs_origskip … 1c_lfs_poseopt_mrnf_expcorr_80k | 1c\L0_lfs_mcmc, L1_poseopt, L2_mrnf, L3_expcorr, L4_2560, L5_cap4m, L6_50k, **L7_80k (최고)** | LichtFeld 실험 L0~L7 |
+| 1c_lfs_poseopt_mrnf_expcorr_fill | 1c\L7_fill | backdrop.ply + holes_backdrop_50k/80k.ply (L6/L7 + 바닥 구멍만) |
+| diag, logs | diag, logs | 진단·실행 로그 |
+- README 표와 이 문서의 결과 경로는 새 위치로 바꿈 (위 "지금 상태" 이전 기록의 `up\1b` 는 당시 이름 그대로 둠)
+- 지움: `1b\data_fill_lfs` (data_fill 과 같은 내용, 해시 확인), 빈 `inc` 폴더, 중간 평가 렌더 eval_step_7000/30000 (4.8GB), 중단한 L8
+
 ## 도구 확인 (2026-11-27)
 | 도구 | 버전 | train_all / register_all 옵션 대조 |
 |---|---|---|
@@ -42,7 +56,7 @@
 - COLMAP 은 한글 경로(F:\Sample\4차\up)에서 정상 동작 확인 (3장 feature_extractor 시험)
 - GitHub 인증 정보가 이 PC 에 저장돼 있지 않아 push 는 자고 있는 동안 못 함 → 로컬 커밋만 쌓고 나중에 push
 
-## 진단 결과 (복도 1, 원래 정합 4차 1b, 전체 1084장) — `F:\Sample\4차\up\diag\diag_1_orig.txt`
+## 진단 결과 (복도 1, 원래 정합 4차 1b, 전체 1084장) — `F:\Sample\4차\up\prev_1\diag\diag_1_orig.txt`
 - 영상: HEVC 10bit 4K 23.976fps 64Mbps, **bt709 SDR (HLG/로그 아님)**, 대비 150 정상. 표본 간 밝기 53~187 → 자동 노출 흔들림 있음 (노출 보정 필요, Brush 엔 없음)
 - 실효 해상도 가로 약 **2,688px** → 학습 2560 이 적정 (계획과 같음)
 - 프레임(1a 1100장): 960px 에서만 선명한 프레임 0% → 추출(pick_best)은 문제 아님
@@ -50,14 +64,14 @@
 - 촬영: 높이 표준편차가 길이의 0.8% (거의 한 높이), 벽 정면 52%·천장 19%·바닥 27% → 커버리지는 괜찮음
 - **순간이동: 중앙 속도 5배 넘게 튄 곳 17곳** (클라우드 표본의 7곳보다 많음). 최대 229배(f_01729→f_01731), 회전 169도(f_00005→f_00007).
   몰려 있는 구간: f_00679~00707, f_00741~00817, f_01729~01733, f_01885~01889
-  → 상위 15곳에 걸린 사진 25장을 뺀 모델 `up\1b_origskip\data` 생성 (COLMAP image_deleter, 1059장, 사진은 원본 연결)
+  → 상위 15곳에 걸린 사진 25장을 뺀 모델 `up\prev_1\1b\data` 생성 (COLMAP image_deleter, 1059장, 사진은 원본 연결)
 
 ## 재정합 결과 (같은 프레임 1100장, sequential overlap 20 + loop detection, 매칭 25분)
 | 정합 | 등록 | 3D 점 | 재투영 오차 평균/중앙 | 점 100개 미만 사진 | 순간이동(5배↑) | 시간 | 판정 |
 |---|---|---|---|---|---|---|---|
 | 원래 4차 1b (exhaustive?, incremental) | 1084 | 64.5만 | 1.05 / 1.02 | 18 | 17 | - | 기준 |
-| global (GLOMAP) `up\1b_global_skip` | 1082 | 48.8만 | 1.04 / 0.92 | 65 | **100** | 46분 | **못 씀**: f_00437~00453 9장이 수천 단위 밖으로 튐(궤적 길이 15→3197), 복도 중간 f_00745~00825 도 크게 튐 |
-| incremental `up\inc\1b` | 1072 | 54.3만 | **0.96 / 0.92** | 31 | **12** | 281분 | **원래보다 나음** (재투영 1px 미만, 순간이동 17→12). 남은 12곳 중 상당수는 22~45 프레임 간격(사이 프레임 미등록)이라 일부는 실제 이동일 수 있음. Brush 평가 진행 중 `up\inc\1c_brush` |
+| global (GLOMAP) `up\prev_1\1b_global_skip` | 1082 | 48.8만 | 1.04 / 0.92 | 65 | **100** | 46분 | **못 씀**: f_00437~00453 9장이 수천 단위 밖으로 튐(궤적 길이 15→3197), 복도 중간 f_00745~00825 도 크게 튐 |
+| incremental `up\prev_1\1b_inc_skip` | 1072 | 54.3만 | **0.96 / 0.92** | 31 | **12** | 281분 | **원래보다 나음** (재투영 1px 미만, 순간이동 17→12). 남은 12곳 중 상당수는 22~45 프레임 간격(사이 프레임 미등록)이라 일부는 실제 이동일 수 있음. Brush 평가 진행 중 `up\prev_1\1c\brush_inc` |
 
 ## Brush 비교 (기준선 설정, 평가 8장마다 1장)
 - 원래 정합: PSNR 25.50 / SSIM 0.872. **PSNR 최하위 사진이 순간이동 목록과 겹침** (f_00743 9.2, f_01887 13.2, f_00779 14.5, f_00815 16.3)
@@ -67,7 +81,7 @@
   → 해상도는 병목 아님. VR 에서 가까이 볼 때 차이가 있는지는 눈으로 확인 필요 (SuperSplat 에서 같은 위치 비교)
 - incremental 재정합: 25.07 / 0.862. **공통 평가 사진 32장 기준 원래 25.76 → 25.07 (나빠짐)**, 반투명 89.0%.
   COLMAP 수치(재투영·순간이동)가 좋아져도 학습 결과는 안 좋아짐 → 3D 점이 적고(54만 vs 64.5만) 매칭이 sequential 이라 사진 간 연결이 약한 탓으로 추정.
-  → **원래 정합 + 순간이동 25장 제외(`up\1b_origskip`)를 기준 정합으로 확정**
+  → **원래 정합 + 순간이동 25장 제외(`up\prev_1\1b`)를 기준 정합으로 확정**
 - 빈 곳 채우기 (순간이동 제외판 + tools/fill): 같은 평가 133장 25.75 → 25.51 / SSIM 0.874 → 0.871.
   반투명 86.9 → 85.0%, 바늘형(>10배) 16.3 → 13.6%, 바탕층 합친 PLY 는 반투명 79.6%.
   PSNR 은 학습 사진 시점만 재므로 "빈 곳"(사진에 안 찍힌 천장 등) 개선은 안 잡힘 → 약간의 하락은 보강 점이 학습을 조금 방해한 정도로 보임. 판단은 눈으로.
@@ -88,13 +102,13 @@
 
 ## 오늘 밤 계획 (GPU 작업은 하나씩)
 1. diagnose.py 로 원래 1b 의 순간이동 전체 목록 (CPU)
-2. 같은 프레임(4차 1a 1100장 사본 → up\1a)으로 재정합: sequential(overlap 20, loop) + global → up\1b
+2. 같은 프레임(4차 1a 1100장 사본 → up\prev_1\1a)으로 재정합: sequential(overlap 20, loop) + global → up\1b
 3. 같은 매칭 DB 로 incremental → 비교용 폴더. 재투영 오차·등록률·순간이동 수 비교
 4. Brush 기준선 설정(1920/300만/SH2/30,000, 평가 8장마다 1장)으로 원래 1b vs 새 정합 PSNR 비교
 5. 나은 정합으로 2560 학습 (8GB 에서 메모리 부족이면 상한 낮춤) → tools/fill 바탕층·시작점 보강
 
 ## 아침 정리 (11-27 09:10)
-- 지금 가장 나은 결과: **`F:\Sample\4차\up\1c_fill_origskip\fill_with_backdrop.ply`** (원래 정합 − 순간이동 25장, Brush 기준선, 바탕층 포함). PSNR 만 보면 `up\1c_brush_origskip\export_30000.ply` (25.75) 가 최고
+- 지금 가장 나은 결과: **`F:\Sample\4차\up\prev_1\1c\brush_fill\fill_with_backdrop.ply`** (원래 정합 − 순간이동 25장, Brush 기준선, 바탕층 포함). PSNR 만 보면 `up\prev_1\1c\brush\export_30000.ply` (25.75) 가 최고
 - 정합을 새로 하는 것(global/incremental)은 효과 없음 → 원래 정합 유지
 - 해상도 2560 은 효과 없음 (시간만 1.5배)
 - 남은 핵심: 자세 미세 보정 + 노출 보정 (LichtFeld `--pose-opt`, `--ppisp`). **VS2022 Installer > 개별 구성 요소 > "Windows용 C++ Clang 컴파일러" 설치** 후 `F:\Sample\tools\lfs\build_lfs.bat` 다시 실행
@@ -104,12 +118,12 @@
 - 원인 분석 (바탕층 점 ↔ 학습 스플랫(불투명도>0.3) 최근접 거리): 바닥은 92% 가 5cm 안에 학습 스플랫 있음(덮임), 천장은 94% 가 비어 있음,
   **벽 바탕층은 80% 가 실제 벽과 5cm 넘게 어긋남** → 반투명 벽 스플랫 뒤로 흐린 바탕층(1/4 크기 사진 6장 중간값 색)이 비쳐 뭉개짐
 - 새 도구 `tools/fill/merge_holes.py`: 벽 바탕층은 빼고, 바닥·천장 바탕층 중 학습 스플랫이 덮지 않은 곳(반경 4.5cm 안 불투명도 합 < 1)만 합침
-  - `up\1c_brush_origskip\holes_backdrop.ply` : 기준선(순간이동 제외) + 바탕층 3.8만 개 ← **추천 확인 대상**
-  - `up\1c_fill_origskip\fill_holes.ply` : 빈 곳 채우기 학습 + 바탕층 0.9만 개
+  - `up\prev_1\1c\brush\holes_backdrop.ply` : 기준선(순간이동 제외) + 바탕층 3.8만 개 ← **추천 확인 대상**
+  - `up\prev_1\1c\brush_fill\fill_holes.ply` : 빈 곳 채우기 학습 + 바탕층 0.9만 개
 
 ## 폴더 정리 (11-27 12:00)
-- `up\1b` (global 정합, 못 씀) → `up\1b_global_skip` 로 이름 변경 (삭제 안 함, `1b` 이름은 새 파이프라인 실행용으로 비워 둠)
-- `up\*.log`, `run_fill_origskip.ps1` → `up\logs\` 로 모음
+- `up\1b` (global 정합, 못 씀) → `up\prev_1\1b_global_skip` 로 이름 변경 (삭제 안 함, `1b` 이름은 새 파이프라인 실행용으로 비워 둠)
+- `up\*.log`, `run_fill_origskip.ps1` → `up\prev_1\logs\` 로 모음
 - `F:\Sample\tools\lfs` 의 실패한 빌드 로그(build_log, build_log2, vs2026/경로 오류 시도) 삭제. 내용은 위 시행착오에 요약돼 있음
 - LichtFeld 빌드 시행착오 추가: ① build_lfs.bat 의 한글 주석을 cmd 가 CP949 로 잘못 읽어 vcvars64 줄이 실행 안 됨 → bat 은 ASCII 만
   ② vcpkg 가 VS2026(18, MSVC 14.52) 컴파일러를 고름 → `F:\Sample\tools\lfs\triplets\x64-windows.cmake` 에 `VCPKG_VISUAL_STUDIO_PATH`(VS2022, 백슬래시 두 번) + `VCPKG_PLATFORM_TOOLSET v143`, cmake 에 `-DVCPKG_OVERLAY_TRIPLETS` → MSVC 14.44 로 빌드 진행 중
@@ -128,7 +142,7 @@
   - 반투명 96.4% 그대로 → 다음: L2 = L1 + `--strategy=mrnf` (v0.5.4.3 기본 전략, MCMC 대신)
 - L2 (L1 + `--strategy=mrnf`): **26.51 / 0.879**, L1 대비 +0.60 (84% 사진 개선). **반투명 96.4 → 63.3%, 바늘형(>10배) 17.3 → 1.3%**. 37분
   - MRNF 는 v0.5.4.3 기본 `--exposure-correction` 이 켜지는데 `--ppisp` 와 같이 못 씀 (첫 시도 즉시 실패) → 한 가지만 바꾸려고 `--no-exposure-correction` 추가
-  - **지금까지 최고 결과**: `F:\Sample\4차\up\1c_lfs_origskip_poseopt_mrnf\splat_30000.ply` → VR/SuperSplat 확인 대상
+  - **지금까지 최고 결과**: `F:\Sample\4차\up\prev_1\1c\L2_mrnf\splat_30000.ply` → VR/SuperSplat 확인 대상
   - 다음: L3 = L2 에서 PPISP → `--exposure-correction`(사진별 노출·WB + 국소 격자, v0.5.4.3 기본) 으로 바꿈. `lfs_eval.ps1 -NoPpisp`
 - L3 (L2 에서 PPISP → `--exposure-correction`): 26.52 / 0.879, L2 와 같음 (+0.02). 반투명 63.3 → 60.9%. 42분
   - 노출 보정 방식은 결과에 거의 영향 없음 → 앞으로 v0.5.4.3 기본값인 exposure-correction 을 기준으로 씀 (`lfs_eval.ps1 -NoPpisp -Extra --pose-opt,--strategy=mrnf`)
@@ -139,15 +153,15 @@
 - L5 (L3 + 상한 400만): 26.54 / 0.881, L3 대비 +0.02 (차이 없음). 반투명 60.9 → 66.2% 로 오히려 늘어남. 48분
   - 스플랫 수를 늘려도 이득 없음, VR 렌더 부담만 커짐 → **300만 유지**
   - 다음: L6 = L3 + 학습 30,000 → 50,000회. 동시에 CPU 로 L3 PLY 에 바닥 구멍만 메우는 backdrop(merge_holes) 적용
-- L3 + 바닥·천장 구멍만 backdrop (CPU, 학습 없음): `F:\Sample\4차\up\1c_lfs_poseopt_mrnf_expcorr_fill\holes_backdrop.ply` (+35,750, 반경 배수 3)
+- L3 + 바닥·천장 구멍만 backdrop (CPU, 학습 없음): `F:\Sample\4차\up\prev_1\1c\L7_fill\holes_backdrop.ply` (+35,750, 반경 배수 3)
   - backdrop 은 `fill_section.py` 로 같은 정합에서 새로 만듦 (`1b_origskip\data_fill_lfs`, 31초). 벽 바탕층 13만 개는 제외
   - 시행착오: Brush PLY 는 x,y,z 가 **맨 뒤**(f_dc, f_rest, opacity, rot, scale, xyz), LichtFeld PLY 는 **맨 앞**(xyz, nx..nz, ...) →
     앞 3열을 좌표로 읽어 "좌표계가 다르다"고 잘못 판단했음. 속성 이름으로 읽으면 Brush·LichtFeld·COLMAP 모두 같은 좌표계 (최근접 0.002)
     merge_holes.py / merge_ply 의 read 는 이름으로 읽으므로 LichtFeld PLY 에도 그대로 쓸 수 있음
 - L6 (L3 + 학습 50,000회): **26.70 / 0.882**, L3 대비 +0.17 (69% 사진 개선). 반투명 60.9 → **55.7%**. 70분
-  - **지금까지 최고**: `F:\Sample\4차\up\1c_lfs_poseopt_mrnf_expcorr_50k\splat_50000.ply`
+  - **지금까지 최고**: `F:\Sample\4차\up\prev_1\1c\L6_50k\splat_50000.ply`
   - 다음: L7 = 학습 80,000회 (더 늘려도 오르는지 확인)
 - L7 (학습 80,000회): **26.79 / 0.885**, L6 대비 +0.09 (57% 사진 개선). 반투명 55.7 → **49.4%**. 91분
   - 학습 횟수: 30k 26.52/60.9% → 50k 26.70/55.7% → 80k 26.79/49.4%. PSNR 증가는 줄지만 **반투명은 계속 줄어듦** (VR 비침에 중요)
-  - **지금까지 최고**: `F:\Sample\4차\up\1c_lfs_poseopt_mrnf_expcorr_80k\splat_80000.ply`
+  - **지금까지 최고**: `F:\Sample\4차\up\prev_1\1c\L7_80k\splat_80000.ply`
   - 다음: L8 = 학습 120,000회 (반투명이 더 줄어드는지). 11-27 부터 기록 push 는 pipeline-upgrade 와 main 둘 다 (잔디 반영)
