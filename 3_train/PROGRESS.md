@@ -10,7 +10,27 @@
 - [x] 2단계 재정합 (sequential + loop, global / incremental) → global 못 씀, **incremental 이 원래보다 나음** (아래 표)
 - [x] 3단계 Brush 2560 → 1920 과 PSNR 같음 (해상도는 병목 아님)
 - [x] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
-- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 PPISP → exposure-correction) 차이 없음. L4(2560) 더 나쁨(-0.11) → 1920 유지. L5(400만) 차이 없음 → 300만 유지. L6(50,000회) 26.70 / 55.7%, **L7(80,000회) 26.79 / 반투명 49.4% = 지금까지 최고**
+- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 PPISP → exposure-correction) 차이 없음. L4(2560) 더 나쁨(-0.11) → 1920 유지. L5(400만) 차이 없음 → 300만 유지. L6(50,000회) 26.70 / 55.7%, **L7(80,000회) 26.79 / 반투명 49.4% = 지금까지 최고**. L8(120,000회)은 재촬영 때문에 중단(중간물 삭제)
+
+## 정리 (11-27 저녁) — 재촬영 전 결론
+**복도 1 최고 설정 (LichtFeld v0.5.4.3)**: 1920, 300만, SH2, MRNF, `--pose-opt`, exposure-correction(기본), 학습 80,000회
+```powershell
+.\3_train\lfs_eval.ps1 -Data "<Nb>\data" -Out "<Nc_lfs>" -Iter 80000 -NoPpisp -Extra @("--pose-opt","--strategy=mrnf")
+```
+- 결과: Brush 기준선 25.75 / 반투명 86.9% → **26.79 / 49.4%** (같은 평가 133장). 91분 (3060 Ti)
+- 효과 있었던 것: `--pose-opt` +0.28, MRNF +0.60 (반투명 96→63%), 학습 횟수 30k→80k +0.27 (반투명 61→49%)
+- 효과 없었던 것: 2560 해상도(-0.11, Brush·LichtFeld 둘 다), 상한 400만(+0.02, 반투명 늘어남), PPISP vs exposure-correction(같음), incremental 재정합(Brush 기준 더 나쁨), 전체 backdrop(흐려짐)
+- 바닥 구멍: `tools/fill/fill_section.py` → `merge_holes.py <out> <학습.ply> <backdrop.ply> 1.0 3` (벽 바탕층 제외, 바닥·천장 구멍만). 결과 `up\1c_lfs_poseopt_mrnf_expcorr_fill\holes_backdrop_80k.ply` — VR 확인 필요
+- 남은 후보: 120,000회(반투명이 계속 주는지), 다른 구간에 같은 설정
+
+**재촬영본 돌리는 순서** (새 영상은 `$Work` 또는 `$VideoDir` 에, 기존 `4차` 폴더는 건드리지 않음)
+1. `.\1_extract\extract_all.ps1` → `Na`
+2. `.\2_register\register_all.ps1` → `Nb` (원래 정합 방식. 순간이동 사진은 `tools/diagnose.py` 로 확인 후 빼기)
+3. 위 `lfs_eval.ps1` (80,000회, 약 1.5시간/구간) → `Nc_lfs`
+4. 필요하면 fill_section + merge_holes 로 바닥 구멍
+
+**촬영 때 참고 (복도 1 진단에서 나온 문제)**: 순간이동(자세가 튀는 사진) 25장, 평가 렌더 어긋남 중앙 2px, 바닥 구멍
+→ 천천히 걷고 빠른 회전 피하기, 모퉁이에서 겹치게 여러 번, 바닥이 화면에 충분히 들어오게
 
 ## 도구 확인 (2026-11-27)
 | 도구 | 버전 | train_all / register_all 옵션 대조 |
