@@ -1,0 +1,12 @@
+icp 옵션: {'max_corr': 0.05}
+0.1m along wall (x)                    before med 0.100  after med 0.100 p95 0.100  accepted 0/8  worse 0  {'나아지지': 8}
+0.1m across wall (y)                   before med 0.100  after med 0.100 p95 0.100  accepted 0/8  worse 0  {'나아지지': 8}
+0.1m up (z)                            before med 0.100  after med 0.100 p95 0.100  accepted 0/8  worse 0  {'겹치는': 8}
+1deg yaw                               before med 0.016  after med 0.016 p95 0.016  accepted 0/8  worse 0  {'나아지지': 8}
+1deg roll (axis x)                     before med 0.017  after med 0.017 p95 0.017  accepted 0/8  worse 0  {'나아지지': 8}
+0.1m random dir + 1deg random axis     before med 0.102  after med 0.102 p95 0.103  accepted 1/8  worse 0  {'회전': 1, '겹치는': 6}
+0.2m random dir + 2deg                 before med 0.205  after med 0.204 p95 0.206  accepted 2/8  worse 0  {'이동': 1, '겹치는': 4, '회전': 1}
+0.5m along wall (x) -> must refuse     before med 0.500  after med 0.500 p95 0.500  accepted 0/8  worse 0  {'나아지지': 8}
+0.5m random dir -> must refuse         before med 0.500  after med 0.500 p95 0.501  accepted 1/8  worse 0  {'겹치는': 7}
+5deg yaw -> must refuse                before med 0.081  after med 0.081 p95 0.081  accepted 0/8  worse 0  {'이동': 8}
+no error (identity)                    before med 0.000  after med 0.000 p95 0.000  accepted 0/8  worse 0  {'나아지지': 8}

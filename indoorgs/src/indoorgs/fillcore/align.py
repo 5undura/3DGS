@@ -26,7 +26,13 @@ def rot_deg(M) -> float:
     return float(np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))))
 
 
-def icp(src, dst, max_rot_deg: float = 3.0, max_trans: float = 0.3, max_corr: float = 0.3,
+# 짝 최대 거리. 예전 0.3: 문 난 벽의 복도 쪽 면(복도 구간만 봄)과 방 쪽 면(방 구간만 봄)이 벽 두께(0.2m)만큼
+# 떨어져 짝이 되어, 이미 맞은 구간을 벽 두께만큼 옮겨 붙였음 (합성 220회 중 121회 나빠짐 -> 0.08 에서 8회,
+# experiments/accuracy/merge_eval.py). 벽 두께의 절반보다 작아야 함. 0.1m 벽은 0.08 로도 못 막음 (RESULTS.md)
+MAX_CORR = 0.08
+
+
+def icp(src, dst, max_rot_deg: float = 3.0, max_trans: float = 0.3, max_corr: float = MAX_CORR,
         iters: int = 40, min_gain: float = 0.1, min_inlier: float = 0.3) -> tuple[np.ndarray | None, dict]:
     """src 를 dst 에 맞추는 4x4 (dst ~= T src). 받아들일 수 없으면 (None, 이유).
     - 짝: 최근접, 거리 < min(max_corr, 3 x 중앙값) 만 (겹치지 않는 부분은 버림)

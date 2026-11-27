@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .schemas import CameraPath, SchemaError, VERSION
 
+FORWARD_TOL = 0.5      # m. 고정점을 선에 붙일 때 앞으로 가는 후보를 이만큼 더 멀어도 고름
 FRAME_RE = re.compile(r"^f_(\d+)_(\d+)\.(jpg|jpeg|png)$", re.IGNORECASE)
 
 
@@ -40,15 +41,20 @@ class Polyline:
         (x1, y1), (x2, y2) = self.pts[i - 1], self.pts[i]
         return x1 + u * (x2 - x1), y1 + u * (y2 - y1)
 
-    def project(self, p: tuple[float, float]) -> tuple[float, float]:
-        """점에서 선까지 가장 가까운 곳의 (거리 s, 떨어진 거리)."""
+    def project(self, p: tuple[float, float], s_min: float | None = None) -> tuple[float, float]:
+        """점에서 선까지 가장 가까운 곳의 (거리 s, 떨어진 거리). s_min 을 주면 s >= s_min 인 부분에서만."""
         best = (0.0, math.inf)
         px, py = p
         for i in range(len(self.pts) - 1):
+            if s_min is not None and self.cum[i + 1] < s_min:
+                continue
             (x1, y1), (x2, y2) = self.pts[i], self.pts[i + 1]
             dx, dy = x2 - x1, y2 - y1
             L2 = dx * dx + dy * dy
-            u = 0.0 if L2 == 0 else max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
+            lo = 0.0
+            if s_min is not None and L2 > 0 and s_min > self.cum[i]:
+                lo = min(1.0, (s_min - self.cum[i]) / math.sqrt(L2))
+            u = lo if L2 == 0 else max(lo, min(1.0, ((px - x1) * dx + (py - y1) * dy) / L2))
             qx, qy = x1 + u * dx, y1 + u * dy
             dist = math.hypot(px - qx, py - qy)
             if dist < best[1]:
@@ -72,6 +78,12 @@ class PathModel:
                     raise SchemaError(f"고정점 t={a.t}: s={s} 가 선 길이 {self.line.length:.2f} 밖")
             else:
                 s, dist = self.line.project(a.point)
+                if knots and s < knots[-1][1]:
+                    # 방을 한 바퀴 돌아 문으로 나오기·왕복처럼 선이 제 자신 가까이 지나가면 가장 가까운 곳이
+                    # 앞서 지난 부분일 수 있음 -> 앞 고정점 뒤쪽에 거의 같은 거리(FORWARD_TOL) 후보가 있으면 그쪽
+                    s2, d2 = self.line.project(a.point, s_min=knots[-1][1])
+                    if d2 <= dist + FORWARD_TOL:
+                        s, dist = s2, d2
                 if dist > snap_warn_m:
                     self.warnings.append(f"고정점 t={a.t}: 선에서 {dist:.2f}m 떨어져 있음 (가까운 곳으로 붙임)")
             knots.append((a.t, s))

@@ -169,3 +169,44 @@ def test_no_icp_when_already_aligned(tmp_path):
     lay = schemas.read_json(pr.layout_json)["sections"]["b"]
     T = np.array(lay["matrix_4x4"])
     assert align.rot_deg(T) < 0.3 and np.linalg.norm(T[:3, 3]) < 0.02
+
+
+# ---- experiments/accuracy/merge_eval.py: 벽 두께 함정 ----
+def two_sided_door(rng, side, wall_t=0.2, sp=0.04):
+    """문 난 벽(두께 wall_t, y=0~wall_t) 근처 1.5m. side='a'(복도, y<0) 는 복도 쪽 면 y=0 만,
+    'b'(방, y>wall_t) 는 방 쪽 면 y=wall_t 만 봄. 둘 다 문틀(양옆 x=±0.5, 위 z=2.1)과 바닥을 봄."""
+    g = np.arange(-1.5, 1.5, sp); z = np.arange(0, 2.6, sp); d = np.arange(0, wall_t, sp / 2)
+    gw, zw = np.arange(-1.5, 1.5, sp * 0.7), np.arange(0, 2.6, sp * 0.7)      # 벽 점이 바닥보다 촘촘 (벽 점 > 절반)
+    X, Z = np.meshgrid(gw, zw); X, Z = X.ravel(), Z.ravel()
+    face = ~((np.abs(X) < 0.5) & (Z < 2.1))
+    yf = 0.0 if side == "a" else wall_t
+    P = [np.c_[X[face], np.full(face.sum(), yf), Z[face]]]
+    Xf, Yf = np.meshgrid(g, np.arange(-1.5, 1.5 + wall_t, sp)); Xf, Yf = Xf.ravel(), Yf.ravel()
+    near = Yf < wall_t if side == "a" else Yf > 0                              # 제 쪽 바닥 + 문턱
+    cone = np.abs(Xf) < 0.5 + (Yf - wall_t if side == "a" else -Yf) * 0.8      # 문 너머 보이는 부채꼴
+    keep = near | cone
+    P.append(np.c_[Xf[keep], Yf[keep], np.zeros(keep.sum())])                   # 바닥
+    for x0 in (-0.5, 0.5):
+        Dd, Zz = np.meshgrid(d, np.arange(0, 2.1, sp))
+        P.append(np.c_[np.full(Dd.size, x0), Dd.ravel(), Zz.ravel()])          # 문틀 옆
+    Xx, Dd = np.meshgrid(np.arange(-0.5, 0.5, sp), d)
+    P.append(np.c_[Xx.ravel(), Dd.ravel(), np.full(Xx.size, 2.1)])             # 문틀 위
+    P = np.concatenate(P)
+    P = P[np.hypot(P[:, 0], P[:, 1] - wall_t / 2) < 1.5]                       # merge.door_points 처럼 문 1.5m 안
+    return P + rng.normal(0, 0.015, P.shape)
+
+
+def test_icp_does_not_glue_wall_faces():
+    # 예전 기본 max_corr 0.3: 이미 맞은 구간을 벽 두께만큼(0.18m) 옮겨 붙였음 -> 0.08
+    rng = np.random.default_rng(3)
+    A, B = two_sided_door(rng, "a"), two_sided_door(rng, "b")
+    T, info = align.icp(B, A)
+    assert T is None or np.linalg.norm(T[:3, 3]) < 0.03, info
+
+
+def test_icp_still_fixes_height_offset():
+    rng = np.random.default_rng(4)
+    A, B = two_sided_door(rng, "a"), two_sided_door(rng, "b") + [0, 0, 0.06]
+    T, info = align.icp(B, A)
+    assert T is not None, info
+    assert T[2, 3] == pytest.approx(-0.06, abs=0.02)

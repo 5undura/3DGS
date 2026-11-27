@@ -1,0 +1,245 @@
+[
+ {
+  "case": "0.1m along wall (x)",
+  "before_m": {
+   "n": 20,
+   "median": 0.1,
+   "p95": 0.1,
+   "max": 0.1,
+   "mean": 0.1
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.105,
+   "p95": 0.107,
+   "max": 0.107,
+   "mean": 0.105
+  },
+  "accepted": 20,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {}
+ },
+ {
+  "case": "0.1m across wall (y)",
+  "before_m": {
+   "n": 20,
+   "median": 0.1,
+   "p95": 0.1,
+   "max": 0.1,
+   "mean": 0.1
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.091,
+   "p95": 0.092,
+   "max": 0.092,
+   "mean": 0.09
+  },
+  "accepted": 20,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {}
+ },
+ {
+  "case": "0.1m up (z)",
+  "before_m": {
+   "n": 20,
+   "median": 0.1,
+   "p95": 0.1,
+   "max": 0.1,
+   "mean": 0.1
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.091,
+   "p95": 0.092,
+   "max": 0.093,
+   "mean": 0.091
+  },
+  "accepted": 20,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {}
+ },
+ {
+  "case": "1deg yaw",
+  "before_m": {
+   "n": 20,
+   "median": 0.017,
+   "p95": 0.017,
+   "max": 0.017,
+   "mean": 0.017
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.091,
+   "p95": 0.093,
+   "max": 0.094,
+   "mean": 0.091
+  },
+  "accepted": 20,
+  "runs": 20,
+  "worse_by_1cm": 20,
+  "refuse_reasons": {}
+ },
+ {
+  "case": "1deg roll (axis x)",
+  "before_m": {
+   "n": 20,
+   "median": 0.017,
+   "p95": 0.017,
+   "max": 0.017,
+   "mean": 0.017
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.091,
+   "p95": 0.092,
+   "max": 0.093,
+   "mean": 0.091
+  },
+  "accepted": 20,
+  "runs": 20,
+  "worse_by_1cm": 20,
+  "refuse_reasons": {}
+ },
+ {
+  "case": "0.1m random dir + 1deg random axis",
+  "before_m": {
+   "n": 20,
+   "median": 0.101,
+   "p95": 0.105,
+   "max": 0.105,
+   "mean": 0.102
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.101,
+   "p95": 0.104,
+   "max": 0.105,
+   "mean": 0.1
+  },
+  "accepted": 15,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {
+   "이동": 4,
+   "나아지지": 1
+  }
+ },
+ {
+  "case": "0.2m random dir + 2deg",
+  "before_m": {
+   "n": 20,
+   "median": 0.202,
+   "p95": 0.209,
+   "max": 0.209,
+   "mean": 0.203
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.18,
+   "p95": 0.207,
+   "max": 0.208,
+   "mean": 0.158
+  },
+  "accepted": 10,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {
+   "이동": 9,
+   "회전": 1
+  }
+ },
+ {
+  "case": "0.5m along wall (x) -> must refuse",
+  "before_m": {
+   "n": 20,
+   "median": 0.5,
+   "p95": 0.5,
+   "max": 0.5,
+   "mean": 0.5
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.408,
+   "p95": 0.415,
+   "max": 0.415,
+   "mean": 0.408
+  },
+  "accepted": 20,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {}
+ },
+ {
+  "case": "0.5m random dir -> must refuse",
+  "before_m": {
+   "n": 20,
+   "median": 0.5,
+   "p95": 0.5,
+   "max": 0.5,
+   "mean": 0.5
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.5,
+   "p95": 0.5,
+   "max": 0.5,
+   "mean": 0.466
+  },
+  "accepted": 4,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {
+   "이동": 10,
+   "회전": 4,
+   "나아지지": 2
+  }
+ },
+ {
+  "case": "5deg yaw -> must refuse",
+  "before_m": {
+   "n": 20,
+   "median": 0.082,
+   "p95": 0.083,
+   "max": 0.083,
+   "mean": 0.083
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.082,
+   "p95": 0.083,
+   "max": 0.083,
+   "mean": 0.083
+  },
+  "accepted": 0,
+  "runs": 20,
+  "worse_by_1cm": 0,
+  "refuse_reasons": {
+   "회전": 20
+  }
+ },
+ {
+  "case": "no error (identity)",
+  "before_m": {
+   "n": 20,
+   "median": 0.0,
+   "p95": 0.0,
+   "max": 0.0,
+   "mean": 0.0
+  },
+  "after_m": {
+   "n": 20,
+   "median": 0.091,
+   "p95": 0.092,
+   "max": 0.092,
+   "mean": 0.091
+  },
+  "accepted": 20,
+  "runs": 20,
+  "worse_by_1cm": 20,
+  "refuse_reasons": {}
+ }
+]

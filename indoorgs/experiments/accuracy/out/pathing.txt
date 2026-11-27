@@ -1,0 +1,17 @@
+ideal(stroke=truth,t exact,no var) xy[n=15000 median=0.201 p95=0.646 max=0.897 mean=0.249] rms/axis=0.226 z_rms=0.095 >1m(3D)=0.0% warn_runs=0
+speed var only                     xy[n=15021 median=0.204 p95=0.68 max=1.055 mean=0.256] rms/axis=0.235 z_rms=0.102 >1m(3D)=0.0% warn_runs=0
+stroke dev only                    xy[n=15000 median=0.247 p95=0.689 max=1.197 mean=0.296] rms/axis=0.251 z_rms=0.105 >1m(3D)=0.3% warn_runs=0
+anchor time err only               xy[n=15000 median=0.237 p95=0.682 max=1.004 mean=0.278] rms/axis=0.245 z_rms=0.102 >1m(3D)=0.0% warn_runs=0
+ALL (5 anchors)                    xy[n=15034 median=0.284 p95=0.759 max=1.302 mean=0.335] rms/axis=0.282 z_rms=0.104 >1m(3D)=0.8% warn_runs=0
+ALL, no door anchor (4)            xy[n=15044 median=0.291 p95=0.759 max=1.446 mean=0.34] rms/axis=0.284 z_rms=0.107 >1m(3D)=0.6% warn_runs=0
+ALL + anchor at 2s pause (6)       xy[n=15046 median=0.271 p95=0.729 max=1.343 mean=0.321] rms/axis=0.27 z_rms=0.101 >1m(3D)=0.5% warn_runs=0
+ALL, start+end only (2)            xy[n=15031 median=0.293 p95=0.784 max=1.436 mean=0.345] rms/axis=0.29 z_rms=0.097 >1m(3D)=0.9% warn_runs=0
+ALL, every stop+pause = 2 anchors (10) xy[n=15047 median=0.195 p95=0.468 max=1.05 mean=0.22] rms/axis=0.18 z_rms=0.102 >1m(3D)=0.0% warn_runs=0
+edge normal                                     max_err=0.0 warnings=0 []
+edge anchors_listed_out_of_order                max_err=0.0 warnings=0 []
+edge stroke_reversed                            max_err=0.0 warnings=2 ['t=0.0->10.0: 선을 거꾸로 감 (15.00->5.00m). 선을 걸은 순서대로 그렸는지 확인']
+edge last_anchor_beyond_video(t=40,video=15s)   max_err=4.167 warnings=0 []
+edge out_and_back_same_corridor                 max_err=0.24 warnings=0 []
+edge room_loop_exit_0.1m_beside_entry           max_err=0.292 warnings=1 ['0/300 runs warned']
+edge room_loop_exit_0.3m_beside_entry           max_err=0.252 warnings=1 ['0/300 runs warned']
+edge room_loop_exit_0.6m_beside_entry           max_err=0.365 warnings=1 ['0/300 runs warned']

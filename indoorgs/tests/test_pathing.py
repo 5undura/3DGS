@@ -60,3 +60,21 @@ def test_demo_path_stays_inside_rooms():
     for t in range(0, 81):
         x, y, _ = m.position(t)
         assert plan.room_at(x, y) is not None, (t, x, y)
+
+
+def test_loop_back_to_door_anchor_snaps_forward():
+    # 방을 한 바퀴 돌아 문(시작점) 0.3m 옆으로 나옴. 끝 고정점이 선 시작 쪽(s=0.3)에 붙으면 마지막 구간이
+    # 거꾸로 걸은 것이 되어 5m 가까이 틀렸음 (experiments/accuracy/pathing_eval.py)
+    stroke = [[0, 0], [0, 5], [5, 5], [5, 0.3], [0, 0.3]]
+    m = PathModel(mk(stroke, [{"t": 0, "point": [0, 0]}, {"t": 15, "point": [5, 5]},
+                              {"t": 22.5, "point": [2.5, 0.3]}, {"t": 25, "point": [0, 0.3]}]))
+    assert m.ss[-1] == pytest.approx(m.line.length)
+    assert m.position(24)[:2] == pytest.approx((1.0, 0.3))
+    assert not any("거꾸로" in w for w in m.warnings)
+
+
+def test_real_backwards_anchor_still_warns():
+    # 앞쪽에 가까운 후보가 없으면 예전처럼 가장 가까운 곳 + 경고
+    m = PathModel(mk([[0, 0], [10, 0]], [{"t": 0, "point": [0, 0]}, {"t": 5, "point": [8, 0]}, {"t": 9, "point": [2, 0]}]))
+    assert m.ss == pytest.approx([0, 8, 2])
+    assert any("거꾸로" in w for w in m.warnings)

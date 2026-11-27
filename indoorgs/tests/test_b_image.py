@@ -1,3 +1,4 @@
+import math
 import cv2
 import numpy as np
 import pytest
@@ -61,3 +62,42 @@ def test_image_perspective():
     assert len(areas) == 3, areas
     assert areas == pytest.approx([27, 31, 31], abs=2.5)
     assert res.extra["rectified"].shape[:2] == (400, 600)
+
+
+# ---- experiments/accuracy/plan_eval.py 에서 찾은 것 ----
+def _box_plan(ppm=50, arrow=False, hatch=False):
+    """10x4m 바깥벽(두께 0.2) 하나, 바깥 면이 그림 테두리 = 네 점을 바깥 모서리에 찍은 것과 같음."""
+    W, H = int(10.2 * ppm), int(4.2 * ppm)
+    img = np.full((H, W, 3), 250, np.uint8)
+    t = int(0.2 * ppm)
+    cv2.rectangle(img, (0, 0), (W - 1, H - 1), (30, 30, 30), -1)
+    cv2.rectangle(img, (t, t), (W - 1 - t, H - 1 - t), (205, 245, 205), -1)   # 옅은 초록 방
+    if arrow:   # 초록 대피 화살표 (밝기 GRAY 110): 방 가운데, 벽에서 1m 안
+        cv2.arrowedLine(img, (int(8 * ppm), H // 2), (int(2 * ppm), H // 2), (40, 160, 40), 9, tipLength=0.2)
+    if hatch:   # 계단 빗금: 윗벽 아래로 0.2m 간격 가는 선 8줄
+        for k in range(1, 9):
+            y = t + int(k * 0.2 * ppm)
+            cv2.line(img, (int(7 * ppm), y), (int(9.5 * ppm), y), (60, 60, 60), 2)
+    return img
+
+
+def test_image_colored_arrow_is_not_wall():
+    res = import_image(_box_plan(arrow=True), px_per_m=50)
+    areas = [r.area for r in res.model.rooms]
+    assert len(areas) == 1 and areas[0] == pytest.approx(9.8 * 3.8, rel=0.03), areas
+
+
+def test_image_outer_wall_on_border_is_centered():
+    # 바깥벽 중심선 = 0.1m 안쪽. 예전엔 안쪽 면(0.2m)만 잡혀 0.1m 어긋났음
+    res = import_image(_box_plan(), px_per_m=50)
+    ver = sorted(s[0][0] for s in res.segments if s[0][0] == s[1][0])
+    hor = sorted(s[0][1] for s in res.segments if s[0][1] == s[1][1])
+    assert ver[0] == pytest.approx(0.1, abs=0.03) and ver[-1] == pytest.approx(10.1, abs=0.03), ver
+    assert hor[0] == pytest.approx(0.1, abs=0.03) and hor[-1] == pytest.approx(4.1, abs=0.03), hor
+
+
+def test_image_hatching_does_not_drag_wall():
+    # 촘촘한 평행선이 사슬로 묶여 윗벽(y=4.1)이 빗금 쪽으로 끌려 내려갔음
+    res = import_image(_box_plan(hatch=True), px_per_m=50)
+    top = [s for s in res.segments if s[0][1] == s[1][1] and math.dist(*s) > 8]
+    assert any(abs(s[0][1] - 4.1) < 0.03 for s in top), top

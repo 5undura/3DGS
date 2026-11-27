@@ -43,7 +43,9 @@ def rectify(img: np.ndarray, corners, size_m: tuple[float, float], px_per_m: flo
     w, h = int(round(size_m[0] * px_per_m)), int(round(size_m[1] * px_per_m))
     if w < 2 or h < 2:
         raise ValueError("보정 크기가 너무 작음 (size_m·px_per_m 확인)")
-    dst = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+    # 네 점 = 보정 이미지의 바깥 테두리(픽셀 가장자리, OpenCV 픽셀 중심 좌표로 -0.5 와 w-0.5): 픽셀 i 의 중심이
+    # (i + 0.5) / px_per_m m 가 되어 _to_m 과 맞음. 예전 (0, w-1) 은 y 로 1px(0.02m) 어긋났음
+    dst = np.array([[-0.5, -0.5], [w - 0.5, -0.5], [w - 0.5, h - 0.5], [-0.5, h - 0.5]], dtype=np.float32)
     H = cv2.getPerspectiveTransform(src, dst)
     out = cv2.warpPerspective(img, H, (w, h), flags=cv2.INTER_LINEAR, borderValue=(255, 255, 255))
     return out, H
@@ -51,7 +53,9 @@ def rectify(img: np.ndarray, corners, size_m: tuple[float, float], px_per_m: flo
 
 def wall_mask(img: np.ndarray, block_m: float | None = None, px_per_m: float = 50.0) -> np.ndarray:
     """어두운 선 = 255. block_m 을 주면 적응형 이진화(조명 고르지 않은 사진), 아니면 Otsu."""
-    gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # 밝기(GRAY) 대신 세 채널 중 최댓값(HSV 의 V): 초록 대피 화살표·빨간 기호는 GRAY 로는 어두워(110, 87)
+    # Otsu 에서 벽으로 잡혀 복도를 막았음. V 로는 160·220 이라 밝은 쪽 (experiments/accuracy/plan_eval.py)
+    gray = img if img.ndim == 2 else img.max(axis=2)
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
     if block_m:
         b = max(3, int(block_m * px_per_m) | 1)
@@ -83,13 +87,14 @@ def merge_axis_segments(segs: list[Seg], line_tol: float, gap: float) -> list[Se
             other.append((a, b))
 
     def merge(items):
-        items.sort()
+        # 긴 선부터, 그 선에서 line_tol 안의 남은 선을 한 묶음으로. 예전엔 좌표순으로 바로 앞 선과 line_tol 안이면
+        # 이어 붙여서, 계단 빗금처럼 촘촘한 평행선이 사슬로 이어져 바깥벽까지 한 줄로 합쳐져 수 m 어긋났음
         groups: list[list] = []
-        for it in items:
-            if groups and it[0] - groups[-1][-1][0] <= line_tol:
-                groups[-1].append(it)
-            else:
-                groups.append([it])
+        left = sorted(items, key=lambda it: -(it[2] - it[1]))
+        while left:
+            c0 = left[0][0]
+            groups.append([it for it in left if abs(it[0] - c0) <= line_tol])
+            left = [it for it in left if abs(it[0] - c0) > line_tol]
         out = []
         for g in groups:
             ivs = sorted((lo, hi, c) for c, lo, hi in g)
@@ -117,14 +122,17 @@ def detect_segments(img: np.ndarray, px_per_m: float, *, min_len_m: float = 0.5,
     """벽 선분 후보 (m, 도면 좌표 y 위). 벽 두께 양쪽 선은 merge_tol_m 안이면 한 줄로 합쳐짐."""
     if mask is None:
         mask = _drop_small_blobs(wall_mask(img, px_per_m=px_per_m), min_len_m * px_per_m)
-    edges = cv2.Canny(mask, *canny)
+    # 테두리를 0 으로 2px 넓혀 Canny: 네 모서리를 바깥벽에 찍으면 바깥벽이 이미지 테두리에 붙어 바깥 면 선이
+    # 안 나오고 안쪽 면만 남아 벽 반 두께(0.1m)만큼 안으로 들어왔음
+    pad = 2
+    edges = cv2.Canny(cv2.copyMakeBorder(mask, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0), *canny)
     lines = cv2.HoughLinesP(edges, 1, np.pi / 180, hough_threshold,
                             minLineLength=max(5, int(min_len_m * px_per_m * 0.5)),
                             maxLineGap=max(2, int(merge_gap_m * px_per_m)))
     h = mask.shape[0]
     segs: list[Seg] = []
-    for x1, y1, x2, y2 in (lines.reshape(-1, 4) if lines is not None else []):
-        a, b = _to_m((x1, y1), h, px_per_m), _to_m((x2, y2), h, px_per_m)
+    for x1, y1, x2, y2 in (lines.reshape(-1, 4) - pad if lines is not None else []):
+        a, b = _to_m((x1 + 0.5, y1 + 0.5), h, px_per_m), _to_m((x2 + 0.5, y2 + 0.5), h, px_per_m)
         ang = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0])) % 180
         if min(ang, 180 - ang) <= axis_snap_deg:
             y = (a[1] + b[1]) / 2
