@@ -11,7 +11,8 @@ param(
     [int]$Width = 1920,
     [int]$Iter = 30000,
     [int]$Sh = 2,
-    [string[]]$Extra = @()
+    [string[]]$Extra = @(),
+    [switch]$NoPpisp   # PPISP 를 빼고 v0.5.4.3 기본 노출 보정(--exposure-correction)을 씀. MRNF 에서는 둘을 같이 못 씀
 )
 . "$PSScriptRoot\..\config.ps1"
 $env:PYTHONIOENCODING = "utf-8"
@@ -20,8 +21,9 @@ $log = Join-Path $Out "lfs_log.txt"
 $ply = Get-ChildItem -LiteralPath $Out -Filter "splat_*.ply" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $ply) {
     $targs = @("-d", $Data, "-o", $Out, "--strategy=mcmc", "--max-cap=$Cap", "--iter=$Iter",
-               "--sh-degree=$Sh", "--max-width=$Width", "--ppisp", "--bg-mode=modulation", "--export=ply",
+               "--sh-degree=$Sh", "--max-width=$Width", "--bg-mode=modulation", "--export=ply",
                "--eval", "--test-every=8", "--headless") + $Extra
+    if (-not $NoPpisp) { $targs += "--ppisp" }
     "시작 $(Get-Date) / lichtfeld $($targs -join ' ')" | Out-File $log -Append -Encoding utf8
     $t = Get-Date
     & $LichtFeld @targs *>&1 | ForEach-Object { "$_" } | Out-File $log -Append -Encoding utf8
