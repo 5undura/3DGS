@@ -101,7 +101,7 @@ def test_snap_stage(tmp_path, monkeypatch):
     rng = np.random.default_rng(3)
     n = 500
     ply = plyio.make(n, plyio.brush_names(2))
-    P = np.column_stack([rng.uniform(0.5, 5.5, n), TRUE_NORTH_Y + rng.uniform(-0.03, 0.03, n), rng.uniform(0.3, 2.3, n)])
+    P = np.column_stack([rng.uniform(0.5, 5.5, n), TRUE_NORTH_Y + rng.uniform(-0.02, 0.02, n), rng.uniform(0.3, 2.3, n)])
     P[-5:] = [[3, 3.6, 1], [3, 3.7, 1], [2, 3.5, 1.5], [1, 3.8, 1], [4, 4, 1]]     # 벽 뒤 부유물
     for k, c in enumerate("xyz"):
         ply.data[c] = P[:, k]

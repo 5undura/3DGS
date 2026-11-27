@@ -59,7 +59,8 @@ class Snap(Stage):
         planes = [wp.plane_from_json(d) for d in schemas.read_json(p.planes_json)["planes"]]
         plan = schemas.load_plan(ctx.project.plan_json)
         out = run / SNAP_PLY
-        info = snap.snap_file(src, out, planes, plan, band=wc.band, remove_behind=wc.remove_behind)
+        info = snap.snap_file(src, out, planes, plan, band=wc.band, color_tol=wc.color_tol,
+                              remove_behind=wc.remove_behind)
         schemas.write_json(run / SNAP_JSON, {"version": schemas.VERSION, **info})
         fb, fa = info.get("flatness_before", {}), info.get("flatness_after", {})
         # thick_m = 면까지 거리 + 법선 방향 두께 (rms_m 은 붙이면 당연히 0 이 되므로 두께를 같이 봄)

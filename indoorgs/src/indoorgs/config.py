@@ -61,7 +61,8 @@ class WallsCfg:
     seed: bool = True                # 면 위에 초기 점 심기 -> data_seed/ 로 학습 (흰 벽 구멍·안개)
     seed_spacing: float = 0.08       # 심는 점 간격 (m)
     snap: bool = True                # 학습 후 벽 근처 스플랫을 면에 붙이고 납작하게 -> splat_walls.ply
-    band: float = 0.06               # 면에서 이 거리(m) 안의 스플랫만 붙임
+    band: float = 0.03               # 면에서 이 거리(m) 안의 스플랫만 붙임 (액자 등 입체감 보호, 지운 의견 ±3 cm)
+    color_tol: float = 0.12          # 그 자리 벽 색과 채널 최대 차이가 이보다 크면 안 붙임 (0..1, 벽에 붙은 물체 보호)
     remove_behind: bool = True       # 벽 뒤(문 구멍 아닌 곳) 부유물 지우기
     search: float = 0.30             # 도면 면에서 이 거리(m) 안의 정합 점으로 실제 면을 찾음
     repair: bool = True              # snap 뒤 면에서 비치거나 빈 칸을 둘레 스플랫 복사로 메움 -> splat_repaired.ply

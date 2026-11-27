@@ -85,7 +85,7 @@ def test_snap(names):
     planes = planes_from_plan(plan, rooms=["A"])
     ply, ids = build(names)
     src = ply.data.copy()
-    out, info = snap.snap_to_planes(ply, planes, band=0.06, thickness=THICK)
+    out, info = snap.snap_to_planes(ply, planes, band=0.06, thickness=THICK, color_tol=None)
     np.testing.assert_array_equal(ply.data, src)                      # 입력은 안 바뀜
     assert out.names == names
 
@@ -128,10 +128,10 @@ def test_snap(names):
 def test_move_only_and_flatten_only():
     planes = planes_from_plan(make_plan(), rooms=["A"])
     ply, _ = build(plyio.brush_names(2), n=500)
-    a, ia = snap.snap_to_planes(ply, planes, flatten=False)
+    a, ia = snap.snap_to_planes(ply, planes, flatten=False, band=0.06, color_tol=None)
     np.testing.assert_array_equal(a.data["rot_0"], ply.data["rot_0"])
     assert ia["n_flattened"] == 0 and ia["n_moved"] > 0
-    b, ib = snap.snap_to_planes(ply, planes, move=False)
+    b, ib = snap.snap_to_planes(ply, planes, move=False, band=0.06, color_tol=None)
     np.testing.assert_array_equal(b.data["x"], ply.data["x"])
     assert ib["n_moved"] == 0 and ib["n_flattened"] > 0
 
@@ -164,7 +164,7 @@ def test_flatness_and_file(tmp_path):
     f_in = plyio.write(tmp_path / "in.ply", ply)
     before = snap.splat_flatness(ply, planes)
     assert before["all"]["count"] > 1000 and before["wall"]["count"] > 0
-    info = snap.snap_file(f_in, tmp_path / "out.ply", planes, plan, thickness=THICK)
+    info = snap.snap_file(f_in, tmp_path / "out.ply", planes, plan, thickness=THICK, band=0.06, color_tol=None)
     after = info["flatness_after"]
     assert after["all"]["rms_dist"] < before["all"]["rms_dist"]
     assert after["all"]["rms_thick"] < before["all"]["rms_thick"]
@@ -181,3 +181,35 @@ def test_flatness_and_file(tmp_path):
         snap.snap_file(f_in, f_in, planes, plan)
     with pytest.raises(TypeError):
         snap.snap_file(f_in, tmp_path / "o2.ply", planes, plan, bogus=1)
+
+
+def test_color_gate_keeps_wall_objects():
+    """지운 의견: 벽 ±3 cm 안이라도 벽 색과 다른 것(액자 등)은 붙이지 않아 입체감 유지."""
+    plan = make_plan()
+    planes = planes_from_plan(plan, ["A"])
+    rng = np.random.default_rng(5)
+    n_wall, n_frame = 3000, 200
+    ply = plyio.make(n_wall + n_frame, plyio.brush_names(1))
+    d = ply.data
+    x = rng.uniform(0.5, 5.5, n_wall + n_frame)
+    z = rng.uniform(0.3, 2.3, n_wall + n_frame)
+    y = 3.0 - rng.uniform(-0.02, 0.02, n_wall + n_frame)        # 북쪽 벽 ±2 cm
+    # 액자: x 2.0~2.5, z 1.2~1.6, 벽에서 2.5 cm 앞, 진한 갈색
+    x[n_wall:] = rng.uniform(2.0, 2.5, n_frame)
+    z[n_wall:] = rng.uniform(1.2, 1.6, n_frame)
+    y[n_wall:] = 3.0 - 0.025
+    d["x"], d["y"], d["z"] = x, y, z
+    d["rot_0"] = 1.0
+    for k in range(3):
+        d[f"scale_{k}"] = np.log(0.02)
+    d["opacity"] = 3.0
+    wall = (np.array([0.85, 0.83, 0.78]) - 0.5) / plyio.SH_C0           # 흰 벽 (조금 흔들림)
+    frame = (np.array([0.35, 0.22, 0.12]) - 0.5) / plyio.SH_C0
+    for c in range(3):
+        d[f"f_dc_{c}"][:n_wall] = wall[c] + rng.normal(0, 0.05, n_wall)
+        d[f"f_dc_{c}"][n_wall:] = frame[c]
+    out, info = snap.snap_to_planes(ply, planes)                          # 기본값 band 3 cm, color_tol 0.12
+    assert info["n_skipped_color"] >= n_frame
+    np.testing.assert_array_equal(out.data[n_wall:], d[n_wall:])          # 액자는 그대로
+    moved = np.abs(out.data["y"][:n_wall] - 3.0) < 1e-5
+    assert moved.mean() > 0.95                                             # 벽은 거의 다 붙음

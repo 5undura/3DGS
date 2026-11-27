@@ -11,6 +11,11 @@
 
 ## 단계별 상세
 
+### 벽에 붙이기 수정 — 지운 의견 (액자 등 입체감 보호)
+- band 6 cm -> **3 cm**, 그리고 **그 자리 벽 색과 비슷한 스플랫만** 붙임 (면을 1 m 칸으로 나눈 칸별 중앙값 색, 채널 최대 차이 0.12 이하).
+- 테스트: 벽 2.5 cm 앞 갈색 액자 200개는 비트 그대로, 흰 벽 스플랫은 95% 넘게 붙음.
+- 설정 `walls.band`, `walls.color_tol`.
+
 ### 면 메우기 (repair) — 지운 아이디어 (splat-repair 참고)
 - 출처: github.com/NicolasDrum/splat-repair (Apache 2.0). `indoorgs/NOTICE`, `indoorgs/licenses/Apache-2.0.txt`, `walls/repair.py` 머리 주석에 고쳐 옮긴 함수 목록.
 - 동작: 면마다 5 cm 칸으로 불투명 덮임(광학 깊이 합)을 재고, 덮임 < 0.5 인 칸(비치거나 빈 곳)을 둘레 0.25 m 의 멀쩡한 스플랫을
