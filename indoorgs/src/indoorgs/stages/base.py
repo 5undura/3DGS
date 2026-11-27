@@ -51,6 +51,9 @@ class Stage:
         """--rerun 때 _prev_<시각> 으로 옮겨 둘 이전 결과 (기본: outputs). 새 폴더에 쓰는 단계는 [] ."""
         return self.outputs(ctx)
 
+    # True 면 --rerun 이 앞 단계부터일 때, 이 단계가 지금 적용 안 되더라도 남은 prev_targets 를 _prev_ 로 옮김
+    invalidate_when_skipped: bool = False
+
 
 class Cancelled(Exception):
     """사용자가 실행을 취소함 (run_all 안에서만 씀)."""
@@ -123,6 +126,12 @@ def run_all(project: Project, only_section: str | None = None, until: str | None
         last_log[0] = ctx.log
         check_cancel()
         if not st.applies(ctx):
+            # 앞 단계를 다시 돌리는 중이면, 지금은 적용 안 되는 단계의 예전 결과도 낡은 것 -> _prev_ 로 (예: register 를
+            # 다시 돌려 도면 좌표가 아니게 되면 walls/·data_seed 가 남아 train 이 쓰는 문제)
+            if (names.index(st.name) >= first_rerun and getattr(st, "invalidate_when_skipped", False)
+                    and any(p.exists() for p in st.prev_targets(ctx))):
+                ctx.log(f"{st.name}: 적용 안 됨, 앞 단계를 다시 돌려 예전 결과는 낡음")
+                move_prev(st, ctx)
             return None
         ctx.rerun = names.index(st.name) >= first_rerun
         if not ctx.rerun and st.is_done(ctx):

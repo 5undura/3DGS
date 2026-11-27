@@ -38,6 +38,9 @@
   (상자 평균을 가우시안으로 근사: 셀보다 작은 가우시안도 면적만큼 셈). 알파는 0.99 로 자름 (3DGS 래스터라이저와 같음).
   셀 덮임 = 1 - Π(1 - ā) = 1 - exp(-τ), τ = Σ -log(1 - ā).
 - 구멍: 면 안 셀(contains_uv, 문 구멍 제외) 중 덮임 < min_cover. 8-이웃 연결 성분 하나 = 구멍 하나.
+  단 법선 방향 ±hole_search(0.3 m) 안 가우시안으로 다시 잰 덮임이 min_cover 이상인 셀은 구멍 아님 (11-28 검토:
+  면이 실제 벽과 1.5~2도 기울거나 몇 cm 떨어지면 band 6 cm 밖이라 빈 것으로 보고 실제 벽 앞에 두 번째 벽을 지음).
+  어느 면을 넘길지(맞춘 면만)는 stages/snap.py Repair 가 정함.
   cameras(도면 좌표 카메라 중심 (M,3)) 를 주면 어떤 카메라도 못 본 셀은 메우지 않음 (방 안쪽, max_view_dist 안,
   입사각 < max_view_deg, 다른 면에 가리지 않음). 넓이 > max_hole_m2 인 구멍은 메우지 않음 (카메라 유무와 무관;
   None 이면 제한 없음). 사진이 '벽이 있다' 고 말하지 않는 큰 빈 곳(유리, 열린 공간, 잘못 맞춘 면)을 막으려고.
@@ -277,7 +280,7 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                  uv_margin: float = 0.05, rim_m: float = 0.25, max_donor_sigma: float = 0.25,
                  min_donors: int = 8, color_smooth: float = 1.0, tone_sigma: float = 0.3, passes: int = 6,
                  max_view_dist: float = 12.0, max_view_deg: float = 80.0, max_cams: int = 256,
-                 texture: dict | None = None, texture_rest: str = "keep"
+                 texture: dict | None = None, texture_rest: str = "keep", hole_search: float | None = 0.30
                  ) -> tuple[GaussianPly, dict]:
     """면마다 덮임 < min_cover 인 셀(문 구멍 제외)을 같은 면 둘레 기증자의 통째 복사로 메운 새 PLY. 규칙은 모듈 설명.
 
@@ -326,6 +329,15 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
         uv, a, b, c, al, good = _inplane(d, g, pl)
         tau = _raster_tau(uv[good], a[good], b[good], c[good], al[good], cell, nu, nv)
         bad = inside & (tau < tau_thr)
+        wide_cov = np.zeros_like(bad)
+        if hole_search is not None and hole_search > band and bad.any():
+            # 면과 조금 기울거나 몇 cm 떨어진 실제 벽: band 안에서는 비어 보여도 ±hole_search 안에서 덮였으면 구멍 아님
+            gw = _face_members(xyz, pl, hole_search, uv_margin)
+            wuv, wa, wb, wc, wal, wgood = _inplane(d, gw, pl)
+            tau_w = _raster_tau(wuv[wgood], wa[wgood], wb[wgood], wc[wgood], wal[wgood], cell, nu, nv)
+            wide_cov = inside & (tau_w >= tau_thr)
+            fi["covered_off_plane_m2"] = float((bad & wide_cov).sum() * cell_a)
+            bad &= ~wide_cov
         fi["hole_m2_before"] = float(bad.sum() * cell_a)
         fi["cover_before"] = float(1.0 - bad.sum() / n_in)
         if not bad.any():
@@ -448,7 +460,7 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                 tau += _raster_tau(nuv[ngood], na[ngood], nb_[ngood], nc[ngood], nal[ngood], cell, nu, nv)
                 todo = tau[cy, cx] < tau_thr
         new_parts.extend(added_face)
-        after = inside & (tau < tau_thr)
+        after = inside & (tau < tau_thr) & ~wide_cov
         fi["hole_m2_after"] = float(after.sum() * cell_a)
         fi["cover_after"] = float(1.0 - after.sum() / n_in)
     if new_parts:

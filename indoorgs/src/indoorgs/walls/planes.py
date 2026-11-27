@@ -14,6 +14,7 @@ Plane
   rooms_for_cameras(plan, centers)         카메라 위치가 들어 있는 방 id (구간이 찍은 방)
   Plane.signed_dist(P) / .uv(P) / .contains_uv(uv, margin) / .point(u, v)
   plane_to_json / plane_from_json          walls/planes.json 저장용
+  better_face(...)                         점 배정 규칙 (가까운 면, 등을 맞댄 공유 벽은 어느 쪽인지로)
 """
 from __future__ import annotations
 
@@ -114,19 +115,47 @@ def _in_polygon(x: np.ndarray, y: np.ndarray, poly, margin: float = 0.0) -> np.n
     return inside
 
 
-def _wall_holes(room: Room, i: int, a: np.ndarray, U2: np.ndarray, length: float, doors, tol: float = 0.15):
-    holes = []
-    nrm = np.array([-U2[1], U2[0]])
+DOOR_TOL = 0.15        # 문 중심이 벽선에서 이 거리(m) 안이면 그 벽의 문 (문의 rooms 가 비었을 때)
+DOOR_TOL_ROOM = 0.30   # 문의 rooms 에 이 방이 있으면 벽 두께로 그린 도면(문 중심이 벽 가운데)까지 허용
+
+
+def _room_wall_holes(room: Room, poly, doors) -> list[list[tuple[float, float, float, float]]]:
+    """방 다각형 변마다 문 구멍 [(u0, u1, 0, 높이)].
+
+    - 구간 겹침: 문 [s - w/2, s + w/2] 가 변 [0, L] 과 겹치면 (s + w/2 > 0 and s - w/2 < L) 그 변에 잘라서 넣음.
+      그래서 한 직선 위에서 꺾임점(정점)으로 나뉜 두 변에 걸친 문은 두 변 모두에 뚫림.
+    - 수직 허용: 문 중심의 벽선까지 거리 < DOOR_TOL (문의 rooms 에 이 방이 있으면 DOOR_TOL_ROOM: 벽 두께 도면).
+    - 같은 방의 여러 변이 후보면 수직 거리가 가장 작은 변들(+2 cm, 같은 직선 위 조각)만. 모서리 옆 문이 옆
+      (수직) 벽에 구멍을 내지 않게."""
+    n = len(poly)
+    out: list[list] = [[] for _ in range(n)]
     for dr in doors:
         if dr.rooms and room.id not in dr.rooms:
             continue
-        c = np.asarray(dr.center, float) - a
-        if abs(c @ nrm) > tol:
+        tol = DOOR_TOL_ROOM if (dr.rooms and room.id in dr.rooms) else DOOR_TOL
+        c0 = np.asarray(dr.center, float)
+        hw = dr.width / 2
+        cands = []
+        for i in range(n):
+            a = np.array(poly[i], float)
+            b = np.array(poly[(i + 1) % n], float)
+            ab = b - a
+            L = float(np.linalg.norm(ab))
+            if L < 1e-6:
+                continue
+            U2 = ab / L
+            c = c0 - a
+            perp = abs(float(c @ np.array([-U2[1], U2[0]])))
+            s = float(c @ U2)
+            if perp < tol and s + hw > 0 and s - hw < L:
+                cands.append((perp, i, max(s - hw, 0.0), min(s + hw, L)))
+        if not cands:
             continue
-        s = c @ U2
-        if -tol <= s <= length + tol:
-            holes.append((s - dr.width / 2, s + dr.width / 2, 0.0, dr.height))
-    return holes
+        pmin = min(c[0] for c in cands)
+        for perp, i, u0, u1 in cands:
+            if perp <= pmin + 0.02 and u1 - u0 > 1e-6:
+                out[i].append((u0, u1, 0.0, dr.height))
+    return out
 
 
 def planes_from_plan(plan: Plan, rooms: list[str] | None = None, default_ceiling: float | None = None) -> list[Plane]:
@@ -143,6 +172,7 @@ def planes_from_plan(plan: Plan, rooms: list[str] | None = None, default_ceiling
         if _poly_area(poly) < 0:
             poly = poly[::-1]
         height = (cz - fz) if cz is not None else 3.0
+        holes = _room_wall_holes(r, poly, plan.doors)
         for i in range(len(poly)):
             a = np.array(poly[i], float)
             b = np.array(poly[(i + 1) % len(poly)], float)
@@ -156,7 +186,7 @@ def planes_from_plan(plan: Plan, rooms: list[str] | None = None, default_ceiling
             U = np.array([U2[0], U2[1], 0.0])
             V = np.array([0.0, 0.0, 1.0])
             out.append(Plane(f"{r.id}:w{i}", WALL, r.id, n, float(n @ origin), origin, U, V, (L, height),
-                             _wall_holes(r, i, a, U2, L, plan.doors)))
+                             holes[i]))
         xs = [p[0] for p in poly]
         ys = [p[1] for p in poly]
         x0, y0, x1, y1 = min(xs), min(ys), max(xs), max(ys)
@@ -197,6 +227,27 @@ def plane_from_json(d: dict) -> Plane:
                  np.asarray(d["origin"], float), np.asarray(d["U"], float), np.asarray(d["V"], float),
                  (float(d["size"][0]), float(d["size"][1])), [tuple(h) for h in d.get("holes", [])],
                  [tuple(q) for q in d["polygon"]] if d.get("polygon") else None)
+
+
+BACK_TO_BACK_COS = -0.9    # 법선이 거의 반대 (약 154도 넘게)
+BACK_TO_BACK_GAP = 0.02    # 두 면 부호 거리 합 <= 이 값이면 등을 맞댄 면 (공유 벽, 도면 벽 두께 0 포함)
+
+
+def better_face(sd_new: np.ndarray, n_new: np.ndarray, sd_cur: np.ndarray, n_cur: np.ndarray,
+                has_cur: np.ndarray) -> np.ndarray:
+    """점 배정에서 새 면이 지금 면보다 나은지 (refine.assign_points, snap.assign 공통).
+
+    기본은 |부호 거리| 가 작은 쪽. 단 두 면이 **등을 맞댄** 경우(법선 거의 반대이고 sd_new + sd_cur <= 작은 값:
+    두 방이 공유하는 벽, 도면 벽 두께 0 이면 두 면이 겹침)는 거리가 아니라 **어느 쪽에 있는지**로 나눔:
+    부호 거리가 큰 면 (= 두 면 가운데 평면을 기준으로 그 면의 방 쪽). 그래서 x = 4.0 에서 B 쪽으로 3.5 cm 인 점은
+    B 면 (A 면에서는 -3.5 cm). 같은 방의 마주 보는 벽(합이 +폭)은 그대로 가까운 쪽."""
+    sd_new = np.asarray(sd_new, float)
+    sd_cur = np.asarray(sd_cur, float)
+    has_cur = np.asarray(has_cur, bool)
+    cosn = np.asarray(n_cur, float).reshape(-1, 3) @ np.asarray(n_new, float)
+    b2b = has_cur & (cosn < BACK_TO_BACK_COS) & (sd_new + np.where(has_cur, sd_cur, 0.0) <= BACK_TO_BACK_GAP)
+    near = np.abs(sd_new) < np.where(has_cur, np.abs(sd_cur), np.inf)
+    return np.where(b2b, sd_new > sd_cur, near)
 
 
 def angle_deg(n1: np.ndarray, n2: np.ndarray) -> float:

@@ -2,7 +2,7 @@
 
 구간 PLY: fill/holes_backdrop.ply 가 있으면 그것, 없으면 최신 train/<학습기>_<프리셋>[_N]/splat.ply.
 구간 변환(모델 좌표 -> 건물 좌표, 4x4):
-1. 공간 정합 구간 (plan.json + 구간 colmap/priors.json): 이미 도면 좌표 -> 단위 행렬.
+1. 공간 정합 구간 (plan.json + 구간 register.json mapper = pose_prior_mapper): 이미 도면 좌표 -> 단위 행렬.
    plan.json 의 문 근처에서 겹치는 구간끼리 작은 강체 정렬(점-점 ICP, 회전 3도·이동 0.3m 이하,
    나아지지 않으면 변환 안 함). 첫 구간이 기준, 뒤 구간을 앞 구간에 맞춤.
 2. 아니면 사용자가 둔 merged/layout.json:
@@ -36,8 +36,8 @@ def section_ply(project, sec, paths) -> Path:
         return paths.fill_ply
     t = project.cfg.train
     run = paths.latest_train_run(t.trainer, t.preset)                      # 최신 학습 (_2, _3 ...)
-    from .snap import best_ply
-    return best_ply(run)                     # 메운 것 > 벽에 붙인 것 > splat.ply
+    from .snap import best_ply, walls_ply_flags
+    return best_ply(run, *walls_ply_flags(project, paths))   # 메운 것 > 벽에 붙인 것 > splat.ply (설정·시각 확인)
 
 
 def read_layout(path: Path, names: list[str]) -> tuple[dict[str, np.ndarray], list[str]]:
@@ -131,7 +131,8 @@ class Merge(Stage):
         missing = [f"{n} ({p})" for n, p in plys.items() if not p.exists()]
         if missing:
             return StageResult(False, "구간 PLY 없음: " + ", ".join(missing))
-        on_plan = [s.name for s, p in secs if pr.has_space and p.priors.exists()]
+        from .diagnose import paths_in_plan_coords
+        on_plan = [s.name for s, p in secs if pr.has_space and paths_in_plan_coords(p)]
         user_layout, notes = {}, []
         if pr.layout_json.exists():
             try:
@@ -148,7 +149,7 @@ class Merge(Stage):
                 layout[n] = {"matrix": np.eye(4), "source": "single"}
         lost = [n for n in names if n not in layout]
         if lost:
-            return StageResult(False, f"배치가 없는 구간 {lost}: 도면 정합(plan.json + priors.json)이나 "
+            return StageResult(False, f"배치가 없는 구간 {lost}: 도면 정합(plan.json + pose_prior_mapper)이나 "
                                       "merged/layout.json 에 구간별 matrix_4x4 를 넣을 것")
         # 문 근처 미세 정렬 (도면 좌표 구간끼리)
         if len(on_plan) > 1:

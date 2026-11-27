@@ -4,6 +4,8 @@
 1) 구간 카메라가 들어 있는 방의 벽·바닥·천장 면을 plan.json 에서 만들고 (walls/planes.py)
 2) 그 면 근처의 COLMAP 점으로 실제 면 위치를 다시 맞춘 뒤 (walls/refine.py, 줄자 도면 오차·축척 오차 흡수)
 3) 흰 벽처럼 점이 없는 면에 사진 색으로 초기 점을 심어 data_seed/ 를 만든다 (walls/seed.py).
+   맞춘 면(fit source "fit")에만 심음: 도면 그대로인 면은 실제 위치를 몰라 실제 벽 앞·뒤에 가짜 면을 만듦.
+   planes.json source_identity (사진 수 + images.bin sha1) 로 train 이 data_seed 가 지금 모델에서 나왔는지 확인.
    학습기는 data_seed/ 가 있으면 그걸 읽음 (stages/train.py). 원본 data/, data_clean/ 은 그대로.
 학습 뒤 벽에 붙이기는 stages/snap.py.
 """
@@ -30,8 +32,46 @@ def walls_apply(ctx: StageContext) -> bool:
     return ctx.project.cfg.walls.enabled and ctx.project.has_space and model_in_plan_coords(ctx)
 
 
+def model_identity(model_dir: Path) -> dict | None:
+    """COLMAP 모델 폴더의 정체: 사진 수 + images.bin sha1 (data_seed 가 지금 data_clean 에서 만든 것인지 확인용)."""
+    import hashlib
+    ib = Path(model_dir) / "images.bin"
+    if not ib.exists():
+        return None
+    h = hashlib.sha1()
+    with open(ib, "rb") as f:
+        n_images = int.from_bytes(f.read(8), "little")
+        f.seek(0)
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return {"n_images": n_images, "images_bin_sha1": h.hexdigest()}
+
+
+def seed_usable(ctx: StageContext) -> tuple[bool, str]:
+    """train 이 data_seed 를 써도 되는지와 이유. 조건: 벽 기능이 이 구간에 적용(도면 좌표·walls.enabled)되고
+    walls.seed 가 켜져 있고, planes.json 에 적힌 원본 모델 정체가 지금 data_clean(없으면 data) 모델과 같음."""
+    p = ctx.paths
+    if not (p.data_seed / "sparse" / "0").exists():
+        return False, "data_seed 없음"
+    if not walls_apply(ctx):
+        return False, "벽 기능이 이 구간에 적용 안 됨 (walls.enabled 꺼짐 또는 도면 좌표 아님)"
+    if not ctx.project.cfg.walls.seed:
+        return False, "walls.seed 꺼짐"
+    if not p.planes_json.exists():
+        return False, "walls/planes.json 없음"
+    try:
+        rec = schemas.read_json(p.planes_json).get("source_identity")
+    except Exception as e:  # noqa: BLE001
+        return False, f"planes.json 읽기 실패 {e}"
+    now = model_identity(source_dir(ctx) / "sparse" / "0")
+    if not rec or rec != now:
+        return False, "data_seed 를 만든 원본 모델이 지금 data_clean 과 다름 (diagnose·register 를 다시 돌림?)"
+    return True, "ok"
+
+
 class Walls(Stage):
     name = "walls"
+    invalidate_when_skipped = True
 
     def applies(self, ctx: StageContext) -> bool:
         return walls_apply(ctx)
@@ -63,6 +103,7 @@ class Walls(Stage):
         xyz = np.array([pt.xyz for pt in m.points.values()]) if m.points else np.zeros((0, 3))
         w = np.array([len(pt.track) for pt in m.points.values()], float) if m.points else None
         fitted, info = refine.refine_planes(planes, xyz, weights=w, search=wc.search)
+        trusted = [q for q, i in zip(fitted, info) if i.get("source") == "fit"]   # 초기 점은 맞춘 면에만
         before = refine.flatness(xyz, planes)
         after = refine.flatness(xyz, fitted)
         n_fit = sum(1 for i in info if i.get("source") == "fit")
@@ -72,6 +113,7 @@ class Walls(Stage):
                 ctx.log(f"  {i['id']}: 도면보다 {i['shift_m'] * 100:+.0f}cm, 기울기 {i.get('tilt_deg', 0):.1f}도")
         p.walls.mkdir(parents=True, exist_ok=True)
         out = {"version": schemas.VERSION, "rooms": rooms, "source_model": src.name,
+               "source_identity": model_identity(src / "sparse" / "0"),
                "planes": [wp.plane_to_json(q) for q in fitted],
                "plan_planes": [wp.plane_to_json(q) for q in planes],
                "fit": info, "room_widths": refine.room_widths(planes, fitted),
@@ -83,7 +125,12 @@ class Walls(Stage):
             if seed_dir.exists():
                 ctx.log(f"끝나지 않은 data_seed -> {move_aside(seed_dir).name}")
             try:
-                sxyz, srgb, sinfo = seed.seed_points(fitted, m, src / "images", spacing=wc.seed_spacing)
+                if trusted:
+                    sxyz, srgb, sinfo = seed.seed_points(trusted, m, src / "images", spacing=wc.seed_spacing)
+                else:
+                    sxyz, srgb = np.zeros((0, 3)), np.zeros((0, 3), np.uint8)
+                    sinfo = {"n_added": 0, "reason": "맞춘 면 없음"}
+                sinfo["planes"] = [q.id for q in trusted]
                 seed.write_seeded_model(m, sxyz, srgb, seed_dir / "sparse" / "0_tmp")
                 link_images(src / "images", seed_dir / "images")
                 (seed_dir / "sparse" / "0_tmp").rename(seed_dir / "sparse" / "0")

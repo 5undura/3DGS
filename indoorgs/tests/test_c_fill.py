@@ -92,6 +92,7 @@ def make_project(root: Path, plan: bool, names=None):
             "rooms": [{"id": "r", "floor": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "floor_z": 0, "ceiling_z": HEIGHT},
                       {"id": "far", "box": {"center": [20, 20], "size": [2, 2]}, "floor_z": 0, "ceiling_z": 2}]})
         schemas.write_json(sec / "colmap" / "priors.json", {"version": 1, "coordinate_system": "CARTESIAN", "frames": []})
+        schemas.write_json(sec / "colmap" / "register.json", {"version": 1, "mapper": "pose_prior_mapper"})
     return Project(root)
 
 

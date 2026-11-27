@@ -6,12 +6,15 @@
   assign(xyz, planes, band, uv_margin=0.05)          -> (면 번호 int32, -1 = 없음), 부호 거리
   snap_to_planes(ply, planes, band=.., thickness=..) -> (새 GaussianPly, info)   중심을 면 위로 + 납작하게
   remove_behind_walls(ply, planes, plan, margin=..)  -> (새 GaussianPly, info)   벽 뒤·바닥 아래·천장 위 떠다니는 것 지움
+  verify_planes(ply, planes)                         -> {면 id: ok, peak_m}       바닥·천장을 스플랫 밀도 봉우리로 확인
+  fraction_in_rooms(ply, plan)                       -> 0..1                     도면 방 안 불투명 스플랫 비율
   splat_flatness(ply, planes, band=.., min_opacity=..) -> dict                   "벽 평탄도" 지표
   snap_file(in_ply, out_ply, planes, plan, **opts)   -> info                     읽기 -> 지우기 -> 붙이기 -> 쓰기
 
 정한 것 (왜 그렇게 했는지)
 - 배정: 가우시안 **중심**이 면에서 |부호 거리| < band 이고 면 범위 안(contains_uv, uv_margin 만큼 가장자리 허용,
   문 구멍 제외)이면 그 면. 여러 면이면 |부호 거리|가 가장 작은 면 (모서리는 가까운 쪽 하나).
+  두 방이 공유하는 벽(등을 맞댄 두 면)은 어느 쪽에 있는지로 나눔 (planes.better_face).
 - 색 검사 (11-28, 지운 의견): 기본 band 3 cm, 그리고 색이 그 자리 벽 색(면을 1 m 칸으로 나눈 칸별 중앙값)과
   채널 최대 0.12 넘게 다르면 안 붙임 -> 액자·게시판처럼 벽에 붙은 물체는 입체감 그대로.
 - 벽에 걸친(straddle) 가우시안: 중심이 band 안이면 법선 방향 두께와 상관없이 납작하게 만든다. 벽 앞의 뿌연 층
@@ -23,6 +26,9 @@
 - 회전: 법선과 가장 정렬된 축 a 를 ±n (a 와 같은 쪽 부호) 으로 보내는 **최소 회전**(로드리게스) Q 를 세 축 모두에
   곱함. 나머지 두 축은 자동으로 면 위에 놓이고 직교·오른손 좌표가 유지됨 ("면에 투영 후 다시 직교화"와 같은 결과를
   가장 작은 회전으로). 쿼터니언은 정규화해서 씀 (w >= 0). 축 번호가 안 바뀌므로 scale_k 는 그 축 그대로.
+- 바늘 (11-28 검토): 법선과 가장 정렬된 축이 가장 긴 축(중간 축의 2배 넘게)이고 법선과 30도 넘게 기울면
+  (최대 약 55도까지 가능) 그 축을 4 mm 로 줄이면 길이 20 cm 바늘이 점이 됨. 그런 가우시안은 옮기기만 하고 납작하게
+  하지 않음 -> snap 뒤에 도는 바늘 쪼개기(walls/cleanup.py)가 처리.
 - 색(f_dc, f_rest)·불투명도·법선(nx..) 은 건드리지 않음 (SH 는 세계 좌표 기준이라 가우시안 자기 축 회전과 무관).
   배정 안 된 가우시안은 비트 그대로. 속성 순서·형식도 입력 그대로.
 - 벽 뒤 지우기: 벽 면 범위 안(문 구멍 **제외**)으로 투영되고 부호 거리 < -margin 이면서, 도면의 **어느 방 안에도
@@ -32,6 +38,11 @@
   점은 양쪽 방 어느 쪽 margin 안이라 남음 (벽 뒤 margin 넘는 것만 지운다는 약속과 같음). 바닥 아래·천장 위: 그 방 다각형 안에서 부호 거리 < -margin 이면 같은 규칙.
   방 안 판정은 plan 을 주면 3D (다각형 + floor_z..ceiling_z). 다각형 목록만 주면 2D 이고, 이때 바닥 아래·천장 위
   판정에는 방 예외를 쓰지 않음 (2D 로는 위층·아래층 방을 알 수 없어서 그 방 다각형 안이면 지움).
+- 지우기 안전장치 (11-28 검토: 도면 천장 2.6 m / 실제 2.8 m 면 실제 천장이 100% 지워짐):
+  ① 면 하나가 그 이웃(면에서 ±0.5 m, 면 범위 안) 불투명 스플랫의 20% 넘게 지우면 그 면은 지우기에 안 씀,
+  ② 전체로 불투명 스플랫의 2% 넘게 지우면 가장 많이 지우는 면부터 뺌. 뺀 면은 info["skipped_faces"] 와 경고.
+  ③ 바닥·천장은 snap_file 이 실제 스플랫의 법선 방향 밀도 봉우리가 면 ±5 cm 안인지 먼저 확인 (verify_planes),
+     아니면 지우기·붙이기 모두에 안 씀. 맞추지 못한 면(planes.json fit source "plan")은 stages/snap.py 가 아예 안 넘김.
 """
 from __future__ import annotations
 
@@ -40,10 +51,17 @@ import numpy as np
 
 from .. import plyio
 from ..plyio import GaussianPly
-from .planes import CEILING, FLOOR, WALL, Plane, _in_polygon
+from .planes import CEILING, FLOOR, WALL, Plane, _in_polygon, better_face
 
 CHUNK = 1 << 20          # 한 번에 다루는 가우시안 수 (메모리 상한)
 KINDS = (WALL, FLOOR, CEILING)
+NEEDLE_MIN_DEG = 30.0    # 법선 쪽 축 = 가장 긴 축이고 법선과 이 각도 넘게 기울면 납작하게 안 함 (바늘)
+NEEDLE_COS = float(np.cos(np.radians(NEEDLE_MIN_DEG)))
+NEEDLE_RATIO = 2.0       # 가장 긴 축 / 중간 축 이 이보다 커야 바늘로 봄 (거의 둥근 덩어리는 그대로 납작하게)
+MAX_REMOVE_FRAC = 0.02   # 벽 뒤 지우기가 불투명 스플랫의 이 비율 넘게 지우면 가장 많이 지우는 면부터 뺌
+MAX_FACE_FRAC = 0.20     # 한 면 이웃(면에서 ±NBHD_M) 불투명 스플랫 중 이 비율 넘게 지우면 그 면은 지우기에 안 씀
+NBHD_M = 0.5
+MIN_IN_ROOMS = 0.5       # 불투명 스플랫 중 도면 방(0.3 m 키움) 안 비율이 이보다 작으면 도면 좌표가 아닌 것으로 보고 건너뜀
 
 
 # ---------------- 배정 ----------------
@@ -57,20 +75,23 @@ def assign(xyz: np.ndarray, planes: list[Plane], band: float, uv_margin: float =
     sdist = np.full(N, np.nan)
     if N == 0 or not planes:
         return idx, sdist
+    normals = np.array([p.n for p in planes], np.float64).reshape(-1, 3)
     for s in range(0, N, chunk):
         P = np.asarray(xyz[s:s + chunk], np.float64)
-        best = np.full(len(P), np.inf)
         bi = np.full(len(P), -1, np.int32)
         bsd = np.full(len(P), np.nan)
         for j, pl in enumerate(planes):
             sd = P @ pl.n - pl.d
-            ad = np.abs(sd)
-            cand = np.nonzero((ad < band) & (ad < best))[0]
+            cand = np.nonzero(np.abs(sd) < band)[0]
+            if len(cand) == 0:
+                continue
+            cur = bi[cand]
+            win = better_face(sd[cand], pl.n, bsd[cand], normals[np.maximum(cur, 0)], cur >= 0)
+            cand = cand[win]
             if len(cand) == 0:
                 continue
             ok = pl.contains_uv(pl.uv(P[cand]), uv_margin)
             c = cand[ok]
-            best[c] = ad[c]
             bi[c] = j
             bsd[c] = sd[c]
         idx[s:s + chunk] = bi
@@ -173,7 +194,8 @@ def snap_to_planes(ply: GaussianPly, planes: list[Plane], *, band: float = 0.03,
     normals = np.array([p.n for p in planes], np.float64).reshape(-1, 3)
     offs = np.array([p.d for p in planes], np.float64)
     info = {"n_total": int(N), "n_assigned": {k: 0 for k in KINDS}, "n_assigned_plane": {},
-            "n_skipped_big": 0, "n_skipped_transparent": 0, "n_skipped_color": 0, "n_moved": 0, "n_flattened": 0,
+            "n_skipped_big": 0, "n_skipped_transparent": 0, "n_skipped_color": 0, "n_skipped_needle": 0,
+            "n_moved": 0, "n_flattened": 0,
             "mean_abs_shift": 0.0, "max_abs_shift": 0.0,
             "params": {"band": band, "thickness": thickness, "max_inplane": max_inplane,
                        "min_opacity": min_opacity, "uv_margin": uv_margin, "flatten": flatten, "move": move,
@@ -240,6 +262,14 @@ def snap_to_planes(ply: GaussianPly, planes: list[Plane], *, band: float = 0.03,
             shift_sum += float(a.sum())
             info["max_abs_shift"] = max(info["max_abs_shift"], float(a.max()))
         if flatten:
+            # 바늘: 법선 쪽 축이 가장 긴 축이고 (중간 축의 NEEDLE_RATIO 배 넘게 김) 법선과 NEEDLE_MIN_DEG 넘게 기울면
+            # 그 축을 thickness 로 줄이면 점이 됨 -> 납작하게 하지 않고 (옮기기만) snap 뒤 바늘 쪼개기(cleanup)에 넘김
+            ss = np.sort(sc, 1)
+            needle = ((k == np.argmax(sc, 1)) & (np.abs(dot) < NEEDLE_COS)
+                      & (ss[:, 2] - ss[:, 1] > np.log(NEEDLE_RATIO)))
+            info["n_skipped_needle"] += int(needle.sum())
+            fl = ~needle
+            g, k, dot, n, R, sc = g[fl], k[fl], dot[fl], n[fl], R[fl], sc[fl]
             ar = np.arange(len(k))
             axis = R[ar, :, k]                             # (M,3) 법선 쪽 축
             target = np.where(dot[:, None] < 0, -n, n)
@@ -283,44 +313,158 @@ def _inside_any_room(P: np.ndarray, rooms, margin: float = 0.0) -> np.ndarray:
     return ins
 
 
-def behind_mask(xyz: np.ndarray, planes: list[Plane], plan_or_polys, margin: float = 0.15,
-                chunk: int = CHUNK) -> tuple[np.ndarray, np.ndarray]:
-    """지울 점 표시와 이유 코드 (0 없음, 1 벽, 2 바닥, 3 천장; 여러 개면 앞의 것)."""
+def behind_faces(xyz: np.ndarray, planes: list[Plane], plan_or_polys, margin: float = 0.15,
+                 chunk: int = CHUNK) -> np.ndarray:
+    """점마다 지우게 만든 면 번호 (-1 = 안 지움; 여러 면이면 벽 > 바닥 > 천장 순서의 앞 것)."""
     rooms = _rooms_3d(plan_or_polys)
     rooms3 = [r for r in rooms if np.isfinite(r[1]) or np.isfinite(r[2])]
     N = len(xyz)
-    reason = np.zeros(N, np.int8)
+    face = np.full(N, -1, np.int32)
     code = {WALL: 1, FLOOR: 2, CEILING: 3}
     order = sorted(range(len(planes)), key=lambda j: code[planes[j].kind])
     for s in range(0, N, chunk):
         P = np.asarray(xyz[s:s + chunk], np.float64)
-        r = np.zeros(len(P), np.int8)
+        f = np.full(len(P), -1, np.int32)
         for j in order:
             pl = planes[j]
-            cand = np.nonzero((r == 0) & ((P @ pl.n - pl.d) < -margin))[0]
+            cand = np.nonzero((f < 0) & ((P @ pl.n - pl.d) < -margin))[0]
             if len(cand) == 0:
                 continue
             ok = pl.contains_uv(pl.uv(P[cand]), 0.0)      # 문 구멍 안이면 False
-            r[cand[ok]] = code[pl.kind]
-        hit = np.nonzero(r == 1)[0]
+            f[cand[ok]] = j
+        kind = np.array([code[p.kind] for p in planes] + [0], np.int8)[f]   # f = -1 -> 0
+        hit = np.nonzero(kind == 1)[0]
         if len(hit) and rooms:
-            r[hit[_inside_any_room(P[hit], rooms, margin)]] = 0
-        hit = np.nonzero(r > 1)[0]                        # 바닥·천장: 높이를 아는 방만 (2D 다각형은 판정 불가)
+            f[hit[_inside_any_room(P[hit], rooms, margin)]] = -1
+        hit = np.nonzero(kind > 1)[0]                     # 바닥·천장: 높이를 아는 방만 (2D 다각형은 판정 불가)
         if len(hit) and rooms3:
-            r[hit[_inside_any_room(P[hit], rooms3, margin)]] = 0
-        reason[s:s + chunk] = r
+            f[hit[_inside_any_room(P[hit], rooms3, margin)]] = -1
+        face[s:s + chunk] = f
+    return face
+
+
+def behind_mask(xyz: np.ndarray, planes: list[Plane], plan_or_polys, margin: float = 0.15,
+                chunk: int = CHUNK) -> tuple[np.ndarray, np.ndarray]:
+    """지울 점 표시와 이유 코드 (0 없음, 1 벽, 2 바닥, 3 천장; 여러 개면 앞의 것)."""
+    face = behind_faces(xyz, planes, plan_or_polys, margin, chunk)
+    code = {WALL: 1, FLOOR: 2, CEILING: 3}
+    reason = np.array([code[p.kind] for p in planes] + [0], np.int8)[face]
     return reason > 0, reason
 
 
 def remove_behind_walls(ply: GaussianPly, planes: list[Plane], plan_or_polys, *, margin: float = 0.15,
+                        max_remove_frac: float | None = MAX_REMOVE_FRAC, max_face_frac: float | None = MAX_FACE_FRAC,
+                        nbhd: float = NBHD_M, min_opacity: float = 0.5, min_nbhd: int = 20,
                         chunk: int = CHUNK) -> tuple[GaussianPly, dict]:
-    """벽 뒤(문 구멍 제외)·바닥 아래·천장 위에 있고 도면의 어느 방에도 없는 가우시안을 뺀 새 PLY."""
-    rm, reason = behind_mask(_XYZ(ply), planes, plan_or_polys, margin, chunk)
+    """벽 뒤(문 구멍 제외)·바닥 아래·천장 위에 있고 도면의 어느 방에도 없는 가우시안을 뺀 새 PLY.
+    안전장치(모듈 설명): 면 이웃의 max_face_frac 넘게, 또는 전체 불투명 스플랫의 max_remove_frac 넘게 지우는 면은
+    빼고 다시 계산. None 이면 그 검사 안 함."""
+    xyz = _XYZ(ply)
+    op = 1.0 / (1.0 + np.exp(-ply.data["opacity"].astype(np.float64)))
+    opq = op >= min_opacity
+    n_opq = max(int(opq.sum()), 1)
+    active = list(range(len(planes)))
+    skipped: dict[str, str] = {}
+    warnings: list[str] = []
+    face = np.full(len(ply.data), -1, np.int32)
+    for _ in range(len(planes) + 1):
+        sub = [planes[j] for j in active]
+        face = behind_faces(xyz, sub, plan_or_polys, margin, chunk)
+        drop: dict[int, str] = {}
+        rm_opq = {}
+        for jj in np.unique(face[face >= 0]):
+            j = active[int(jj)]
+            pl = planes[j]
+            mine = (face == jj) & opq
+            rm_opq[j] = int(mine.sum())
+            if max_face_frac is None or rm_opq[j] == 0:
+                continue
+            nb, nrm = 0, 0
+            for s in range(0, len(xyz), chunk):
+                P = xyz[s:s + chunk]
+                sd = P @ pl.n - pl.d
+                c = np.nonzero((np.abs(sd) < nbhd) & opq[s:s + chunk])[0]
+                if len(c):
+                    c = c[pl.contains_uv(pl.uv(P[c]), 0.0)]
+                nb += len(c)
+                nrm += int(mine[s:s + chunk][c].sum())
+            if nb >= min_nbhd and nrm / nb > max_face_frac:
+                drop[j] = f"면 이웃 불투명 스플랫의 {nrm / nb * 100:.0f}% 를 지움 (> {max_face_frac * 100:.0f}%)"
+        if not drop and max_remove_frac is not None and sum(rm_opq.values()) / n_opq > max_remove_frac:
+            j = max(rm_opq, key=rm_opq.get)
+            drop[j] = (f"전체 불투명 스플랫의 {sum(rm_opq.values()) / n_opq * 100:.1f}% 를 지움 "
+                       f"(> {max_remove_frac * 100:.0f}%), 이 면이 {rm_opq[j]:,}개로 가장 많음")
+        if not drop:
+            break
+        for j, why in drop.items():
+            skipped[planes[j].id] = why
+            warnings.append(f"경고: {planes[j].id} 뒤 지우기 건너뜀 - {why} (도면 면이 실제와 다를 수 있음)")
+        active = [j for j in active if j not in drop]
+    rm = face >= 0
+    code = {WALL: 1, FLOOR: 2, CEILING: 3}
+    sub = [planes[j] for j in active]
+    reason = np.array([code[p.kind] for p in sub] + [0], np.int8)[face]
     info = {"n_total": int(ply.n), "n_removed": int(rm.sum()), "n_kept": int(ply.n - rm.sum()),
             "removed_by": {WALL: int(np.sum(reason == 1)), FLOOR: int(np.sum(reason == 2)),
                            CEILING: int(np.sum(reason == 3))},
-            "margin": margin}
+            "removed_by_plane": {sub[int(j)].id: int(np.sum(face == j)) for j in np.unique(face[face >= 0])},
+            "skipped_faces": skipped, "warnings": warnings,
+            "margin": margin, "max_remove_frac": max_remove_frac, "max_face_frac": max_face_frac}
     return GaussianPly(ply.data[~rm].copy(), list(ply.comments)), info
+
+
+def verify_planes(ply: GaussianPly, planes: list[Plane], kinds=(FLOOR, CEILING), *, search: float = 0.30,
+                  tol: float = 0.05, bin_m: float = 0.02, min_count: int = 30, min_opacity: float = 0.5,
+                  chunk: int = CHUNK) -> dict:
+    """kinds 면마다 실제 불투명 스플랫의 법선 방향 밀도 봉우리(면 범위 안, ±search, bin_m 칸)가 면에서 tol 안인지.
+    반환 {면 id: {"ok", "peak_m", "n"}} (kinds 아닌 면은 없음). 스플랫이 min_count 보다 적으면 ok=False (확인 불가)."""
+    out = {}
+    js = [j for j, p in enumerate(planes) if p.kind in kinds]
+    if not js:
+        return out
+    edges = np.arange(-search, search + 1e-9, bin_m)
+    hist = {j: np.zeros(len(edges) - 1) for j in js}
+    d = ply.data
+    for s in range(0, len(d), chunk):
+        e = min(len(d), s + chunk)
+        op = 1.0 / (1.0 + np.exp(-d["opacity"][s:e].astype(np.float64)))
+        P = np.stack([d["x"][s:e], d["y"][s:e], d["z"][s:e]], 1).astype(np.float64)[op >= min_opacity]
+        for j in js:
+            pl = planes[j]
+            sd = P @ pl.n - pl.d
+            c = np.nonzero(np.abs(sd) < search)[0]
+            if len(c):
+                c = c[pl.contains_uv(pl.uv(P[c]), 0.0)]
+            hist[j] += np.histogram(sd[c], edges)[0]
+    for j in js:
+        h = hist[j]
+        n = int(h.sum())
+        if n < min_count:
+            out[planes[j].id] = {"ok": False, "peak_m": None, "n": n, "reason": f"스플랫 부족 ({n} < {min_count})"}
+            continue
+        hs = np.convolve(h, np.ones(3) / 3, mode="same")              # 칸 경계에 걸친 봉우리
+        k = int(np.argmax(hs))
+        peak = float(0.5 * (edges[k] + edges[k + 1]))
+        r = {"ok": abs(peak) <= tol, "peak_m": peak, "n": n}
+        if not r["ok"]:
+            r["reason"] = f"스플랫 밀도 봉우리가 면에서 {peak * 100:+.0f}cm (허용 ±{tol * 100:.0f}cm)"
+        out[planes[j].id] = r
+    return out
+
+
+def fraction_in_rooms(ply: GaussianPly, plan_or_polys, margin: float = 0.3, min_opacity: float = 0.5,
+                      chunk: int = CHUNK) -> float:
+    """불투명 스플랫 중 도면 방(margin 만큼 키움, 높이 포함) 안 비율. 학습 PLY 가 도면 좌표인지 보는 데 씀."""
+    rooms = _rooms_3d(plan_or_polys)
+    d = ply.data
+    n_in = n = 0
+    for s in range(0, len(d), chunk):
+        e = min(len(d), s + chunk)
+        op = 1.0 / (1.0 + np.exp(-d["opacity"][s:e].astype(np.float64)))
+        P = np.stack([d["x"][s:e], d["y"][s:e], d["z"][s:e]], 1).astype(np.float64)[op >= min_opacity]
+        n += len(P)
+        n_in += int(_inside_any_room(P, rooms, margin).sum()) if rooms else 0
+    return n_in / n if n else 1.0
 
 
 class _XYZ:
@@ -391,10 +535,16 @@ _SNAP_KEYS = {"band", "thickness", "max_inplane", "min_opacity", "uv_margin", "f
 
 
 def snap_file(in_ply, out_ply, planes: list[Plane], plan, *, remove_behind: bool = True, margin: float = 0.15,
-              flat_band: float = 0.05, **opts) -> dict:
-    """읽기 -> (remove_behind 면) remove_behind_walls -> snap_to_planes -> 새 파일에 쓰기. 입력 파일은 안 바꿈.
+              flat_band: float = 0.05, verify: bool = True, min_in_rooms: float | None = MIN_IN_ROOMS,
+              max_remove_frac: float | None = MAX_REMOVE_FRAC, max_face_frac: float | None = MAX_FACE_FRAC,
+              **opts) -> dict:
+    """읽기 -> (검사) -> (remove_behind 면) remove_behind_walls -> snap_to_planes -> 새 파일에 쓰기. 입력 파일은 안 바꿈.
     opts 는 snap_to_planes 인자. plan 은 Plan (또는 remove_behind_walls 가 받는 방 목록).
-    반환 요약 키: n_removed, n_moved, n_flattened, flatness_before/after["rms_m"] (자세한 것은 remove/snap/flatness_*)."""
+    planes 는 믿을 수 있는 면(정합 점으로 맞춘 면)만 줄 것 (stages/snap.py). 여기서 더 거르는 것:
+    - min_in_rooms: 불투명 스플랫 중 도면 방(0.3 m 키움) 안이 이 비율 미만이면 도면 좌표가 아닌 PLY 로 보고 아무것도
+      안 씀 (info["skipped"] = 이유, 파일 안 만듦).
+    - verify: 바닥·천장은 스플랫 밀도 봉우리로 확인(verify_planes), 실패한 면은 지우기·붙이기에 안 씀.
+    반환 요약 키: n_removed, n_moved, n_flattened, flatness_before/after["rms_m"], planes_used, warnings."""
     bad = set(opts) - _SNAP_KEYS
     if bad:
         raise TypeError(f"모르는 옵션 {sorted(bad)}")
@@ -402,12 +552,30 @@ def snap_file(in_ply, out_ply, planes: list[Plane], plan, *, remove_behind: bool
     if in_ply.resolve() == out_ply.resolve():
         raise ValueError("out_ply 가 in_ply 와 같음 - 원본을 덮어쓰지 않음")
     ply = plyio.read(in_ply)
-    info: dict = {"in": str(in_ply), "out": str(out_ply), "stats_before": plyio.stats(ply),
-                  "flatness_before": splat_flatness(ply, planes, band=flat_band)}
+    info: dict = {"in": str(in_ply), "out": str(out_ply), "warnings": []}
+    if min_in_rooms is not None and plan is not None:
+        frac = fraction_in_rooms(ply, plan)
+        info["in_rooms_frac"] = frac
+        if frac < min_in_rooms:
+            info["skipped"] = (f"불투명 스플랫 중 도면 방 안이 {frac * 100:.0f}% (< {min_in_rooms * 100:.0f}%): "
+                               "학습 PLY 가 도면 좌표가 아닌 것 같음 -> 벽 붙이기 건너뜀")
+            info["warnings"].append("경고: " + info["skipped"])
+            return info
+    if verify:
+        info["verify"] = verify_planes(ply, planes)
+        bad_ids = {k for k, v in info["verify"].items() if not v["ok"]}
+        for k in sorted(bad_ids):
+            info["warnings"].append(f"경고: {k} 안 씀 - {info['verify'][k].get('reason')}")
+        planes = [p for p in planes if p.id not in bad_ids]
+    info["planes_used"] = [p.id for p in planes]
+    info["stats_before"] = plyio.stats(ply)
+    info["flatness_before"] = splat_flatness(ply, planes, band=flat_band)
     info["n_removed"] = 0
     if remove_behind and plan is not None:
-        ply, info["remove"] = remove_behind_walls(ply, planes, plan, margin=margin)
+        ply, info["remove"] = remove_behind_walls(ply, planes, plan, margin=margin, max_remove_frac=max_remove_frac,
+                                                  max_face_frac=max_face_frac)
         info["n_removed"] = info["remove"]["n_removed"]
+        info["warnings"] += info["remove"]["warnings"]
     ply, info["snap"] = snap_to_planes(ply, planes, **opts)
     info["n_moved"], info["n_flattened"] = info["snap"]["n_moved"], info["snap"]["n_flattened"]
     info["flatness_after"] = splat_flatness(ply, planes, band=flat_band)

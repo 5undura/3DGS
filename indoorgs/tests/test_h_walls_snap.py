@@ -94,7 +94,8 @@ def test_snap(names):
     touched[ids["big"]] = False
     assert idx[ids["big"]].min() >= 0                                  # 배정은 되지만 안 건드림
     assert info["n_skipped_big"] == 2
-    assert info["n_moved"] == info["n_flattened"] == touched.sum() > 3000
+    assert info["n_moved"] == touched.sum() > 3000
+    assert info["n_flattened"] == touched.sum() - info["n_skipped_needle"]
     assert sum(info["n_assigned"].values()) == (idx >= 0).sum()
 
     # 안 건드린 것은 비트 그대로
@@ -108,6 +109,18 @@ def test_snap(names):
     n = np.array([planes[j].n for j in idx[t]])
     dd = np.array([planes[j].d for j in idx[t]])
     assert np.abs(np.einsum("mi,mi->m", out.xyz[t], n) - dd).max() < 1e-5
+    # 바늘 (법선 쪽 축 = 가장 긴 축, 법선과 30도 넘게): 옮기기만 하고 회전·크기 그대로
+    q0 = np.stack([src[f"rot_{i}"][t] for i in range(4)], 1).astype(float)
+    dots = np.einsum("mik,mi->mk", plyio.quat_to_mat(q0), n)
+    k0 = np.argmax(np.abs(dots), 1)
+    sc0 = np.stack([src[f"scale_{i}"][t] for i in range(3)], 1).astype(float)
+    ss = np.sort(sc0, 1)
+    needle = ((k0 == np.argmax(sc0, 1)) & (np.abs(dots[np.arange(len(t)), k0]) < np.cos(np.radians(30)))
+              & (ss[:, 2] - ss[:, 1] > np.log(2.0)))
+    assert needle.sum() == info["n_skipped_needle"] > 0
+    for kk in [f"rot_{i}" for i in range(4)] + [f"scale_{i}" for i in range(3)]:
+        np.testing.assert_array_equal(out.data[kk][t[needle]], src[kk][t[needle]])
+    t, n = t[~needle], n[~needle]
     q_in = np.stack([src[f"rot_{i}"][t] for i in range(4)], 1).astype(float)
     q_out = np.stack([out.data[f"rot_{i}"][t] for i in range(4)], 1).astype(float)
     assert np.abs(np.linalg.norm(q_out, axis=1) - 1).max() < 1e-6
@@ -213,3 +226,109 @@ def test_color_gate_keeps_wall_objects():
     np.testing.assert_array_equal(out.data[n_wall:], d[n_wall:])          # 액자는 그대로
     moved = np.abs(out.data["y"][:n_wall] - 3.0) < 1e-5
     assert moved.mean() > 0.95                                             # 벽은 거의 다 붙음
+
+
+# ---------------- 11-28 검토 회귀 ----------------
+def _sheet_ply(P, opacity=3.0, scale=0.02):
+    ply = plyio.make(len(P), plyio.brush_names(2))
+    for i, c in enumerate("xyz"):
+        ply.data[c] = P[:, i]
+    ply.data["rot_0"] = 1.0
+    for i in range(3):
+        ply.data[f"scale_{i}"] = np.log(scale)
+    ply.data["opacity"] = opacity
+    return ply
+
+
+def _corridor():
+    return parse_plan({"version": 1, "units": "m", "rooms": [
+        {"id": "A", "floor": [[0, 0], [20, 0], [20, 2], [0, 2]], "floor_z": 0.0, "ceiling_z": 2.6}], "doors": []})
+
+
+def test_remove_behind_caps_wrong_plan_faces():
+    """도면 천장 2.6 m / 실제 2.8 m, 도면 끝벽 x=20 / 실제 20.4: 면이 이웃 스플랫 대부분을 지우게 되면 그 면은 빼고
+    경고 (예전: 실제 천장·끝벽 100% 삭제). 진짜 부유물(다른 면 뒤)은 그대로 지움."""
+    plan = _corridor()
+    pls = planes_from_plan(plan)
+    rng = np.random.default_rng(0)
+    n = 4000
+    floor = np.stack([rng.uniform(0, 20, n), rng.uniform(0, 2, n), np.zeros(n)], 1)
+    ceil = np.stack([rng.uniform(0, 20, n), rng.uniform(0, 2, n), np.full(n, 2.8)], 1)
+    endw = np.stack([np.full(n // 4, 20.4), rng.uniform(0, 2, n // 4), rng.uniform(0, 2.6, n // 4)], 1)
+    side = np.stack([rng.uniform(0, 20, n), np.zeros(n), rng.uniform(0, 2.6, n)], 1)
+    floaters = np.array([[5.0, -0.6, 1.0], [8.0, -0.5, 1.5]])            # 남쪽 벽(y=0) 뒤
+    ply = _sheet_ply(np.vstack([floor, ceil, endw, side, floaters]))
+    out, info = snap.remove_behind_walls(ply, pls, plan)
+    assert "A:ceiling" in info["skipped_faces"] and "A:w1" in info["skipped_faces"]
+    assert info["n_removed"] == 2 and info["removed_by_plane"] == {"A:w0": 2}
+    assert out.n == ply.n - 2 and info["warnings"]
+    # 검사를 끄면 예전 동작 (실제 천장이 지워짐) - 안전장치가 실제로 막은 것인지 확인
+    _, raw = snap.remove_behind_walls(ply, pls, plan, max_face_frac=None, max_remove_frac=None)
+    assert raw["n_removed"] > n
+
+
+def test_remove_behind_global_cap():
+    """한 면이 이웃의 20% 미만이라도 전체 불투명 스플랫의 2% 넘게 지우면 빼고 다시 계산."""
+    plan = _corridor()
+    pls = [p for p in planes_from_plan(plan) if p.id == "A:w0"]
+    rng = np.random.default_rng(1)
+    side = np.stack([rng.uniform(0, 20, 20000), np.zeros(20000), rng.uniform(0, 2.6, 20000)], 1)
+    behind = np.stack([rng.uniform(0, 20, 1000), np.full(1000, -1.0), rng.uniform(0, 2.6, 1000)], 1)   # 이웃(0.5 m) 밖
+    ply = _sheet_ply(np.vstack([side, behind]))
+    _, info = snap.remove_behind_walls(ply, pls, plan)
+    assert info["n_removed"] == 0 and "A:w0" in info["skipped_faces"]
+    _, info = snap.remove_behind_walls(ply, pls, plan, max_remove_frac=0.1)
+    assert info["n_removed"] == 1000
+
+
+def test_verify_planes_density_peak():
+    plan = _corridor()
+    pls = planes_from_plan(plan)
+    rng = np.random.default_rng(2)
+    n = 3000
+    floor = np.stack([rng.uniform(0, 20, n), rng.uniform(0, 2, n), rng.normal(0.01, 0.005, n)], 1)
+    ceil = np.stack([rng.uniform(0, 20, n), rng.uniform(0, 2, n), np.full(n, 2.8)], 1)
+    v = snap.verify_planes(_sheet_ply(np.vstack([floor, ceil])), pls)
+    assert set(v) == {"A:floor", "A:ceiling"}
+    assert v["A:floor"]["ok"] and abs(v["A:floor"]["peak_m"]) < 0.03
+    assert not v["A:ceiling"]["ok"] and abs(v["A:ceiling"]["peak_m"] + 0.2) < 0.03
+
+
+def test_needle_tilted_from_normal_not_squashed():
+    """법선 쪽 축이 가장 긴 축(20 cm)이고 법선과 40도: 4 mm 점으로 만들지 않음 (옮기기는 함)."""
+    from indoorgs.walls.planes import Plane, WALL
+    pA = Plane("A:w", WALL, "A", np.array([0, 1., 0]), 0.0, np.zeros(3), np.array([1., 0, 0]),
+               np.array([0, 0, 1.]), (4., 2.6))
+    p = plyio.make(2, plyio.brush_names(2))
+    p.data["x"], p.data["y"], p.data["z"] = 1, 0.01, 1
+    a = np.radians(40)
+    ax0 = np.array([np.sin(a), np.cos(a), 0]); ax1 = np.array([np.cos(a), -np.sin(a), 0])
+    q = plyio.mat_to_quat(np.stack([ax0, ax1, np.cross(ax0, ax1)], 1))
+    for i in range(4):
+        p.data[f"rot_{i}"] = q[i]
+    p.data["scale_0"], p.data["scale_1"], p.data["scale_2"], p.data["opacity"] = np.log(0.2), np.log(0.005), np.log(0.005), 3
+    p.data["scale_0"][1] = np.log(0.006)            # 거의 둥근 것은 그대로 납작하게
+    o, info = snap.snap_to_planes(p, [pA], color_tol=None)
+    assert info["n_skipped_needle"] == 1 and info["n_moved"] == 2 and info["n_flattened"] == 1
+    assert o.data["scale_0"][0] == p.data["scale_0"][0] and o.data["y"][0] == 0
+    assert np.exp(min(o.data[f"scale_{i}"][1] for i in range(3))) <= 0.004 + 1e-6
+
+
+def test_assign_back_to_back_shared_wall():
+    """snap.assign 도 공유 벽은 어느 쪽인지로: x=4 에서 B 쪽 3.5 cm 인 점은 B 면 (예전: 먼저 온 A 면)."""
+    from indoorgs.schemas import Plan, Room
+    A = Room("A", [(0, 0), (4, 0), (4, 3), (0, 3)], 0.0, 2.6)
+    B = Room("B", [(4, 0), (8, 0), (8, 3), (4, 3)], 0.0, 2.6)
+    pl = planes_from_plan(Plan([A, B], []))
+    idx, sd = snap.assign(np.array([[4.035, 1.5, 1.0], [3.97, 1.5, 1.0]]), pl, 0.06)
+    assert [pl[k].id for k in idx] == ["B:w3", "A:w1"]
+    assert sd[0] == pytest.approx(0.035) and sd[1] == pytest.approx(0.03)
+
+
+def test_snap_file_skips_ply_not_in_plan_coords(tmp_path):
+    plan = _corridor()
+    rng = np.random.default_rng(3)
+    P = rng.uniform([50, 50, 0], [60, 60, 3], (500, 3))              # 도면과 다른 좌표
+    plyio.write(tmp_path / "in.ply", _sheet_ply(P))
+    info = snap.snap_file(tmp_path / "in.ply", tmp_path / "out.ply", planes_from_plan(plan), plan)
+    assert info["skipped"] and info["in_rooms_frac"] < 0.5 and not (tmp_path / "out.ply").exists()

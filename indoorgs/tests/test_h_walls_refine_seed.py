@@ -10,6 +10,7 @@ from indoorgs.colmap import model as cm
 from indoorgs.walls import planes as wp
 from indoorgs.walls.refine import assign_points, edge_distance, flatness, refine_planes, room_widths
 from indoorgs.walls.seed import seed_points, write_seeded_model
+from indoorgs.walls.planes import planes_from_plan
 
 H = 2.6
 
@@ -279,3 +280,67 @@ def test_seed_skip_near_existing(tmp_path):
     xyz, _, info = seed_points(planes, model, image_dir, spacing=0.15, skip_near_existing=0.3)
     assert info["n_skipped_near_existing"] > 0
     assert np.linalg.norm(xyz - model.points[1].xyz, axis=1).min() > 0.3
+
+
+# ---------------- 11-28 검토 회귀 ----------------
+def test_door_hole_spans_collinear_segments():
+    """꺾임점으로 나뉜 한 직선 위 두 변에 걸친 문은 두 변 모두에 뚫리고, 모서리 옆 수직 벽에는 안 뚫림."""
+    from indoorgs.schemas import Plan, Room, Door
+    from indoorgs.walls import seed
+    from indoorgs.walls import snap as ws
+    r = Room("A", [(0, 0), (2, 0), (5, 0), (5, 3), (0, 3)], 0.0, 2.6)
+    plan = Plan([r], [Door("d", ["A"], (1.8, 0.0), 0.9, 2.1)])
+    pls = planes_from_plan(plan)
+    w0, w1 = pls[0], pls[1]
+    assert w0.holes == [pytest.approx((1.35, 2.0, 0.0, 2.1))]
+    assert len(w1.holes) == 1 and w1.holes[0][0] == 0.0 and w1.holes[0][1] == pytest.approx(0.25)
+    assert not w1.contains_uv(w1.uv(np.array([[2.15, 0, 1.0]])))[0]
+    X, _ = seed.sample_faces(pls, 0.05)
+    assert not ((X[:, 0] > 1.36) & (X[:, 0] < 2.24) & (np.abs(X[:, 1]) < 1e-6) & (X[:, 2] < 2.09)).any()
+    rm, _ = ws.behind_mask(np.array([[2.15, -0.5, 1.0], [1.6, -0.5, 1.0]]), pls, plan)
+    assert not rm.any()
+    # 모서리 옆 문: 수직 벽(서쪽 x=0)에는 구멍 없음
+    plan2 = Plan([Room("B", [(0, 0), (4, 0), (4, 3), (0, 3)], 0.0, 2.6)], [Door("c", ["B"], (0.3, 0.0), 0.9, 2.1)])
+    p2 = {p.id: p for p in planes_from_plan(plan2)}
+    assert len(p2["B:w0"].holes) == 1 and p2["B:w3"].holes == []
+
+
+def test_door_hole_wall_thickness_drawing():
+    """벽 두께로 그린 도면: 문 중심이 벽선에서 0.12 m (rooms 에 이 방) -> 구멍. rooms 없는 문은 0.15 m 까지만."""
+    from indoorgs.schemas import Plan, Room, Door
+    room = Room("A", [(0, 0), (4, 0), (4, 3), (0, 3)], 0.0, 2.6)
+    p = {q.id: q for q in planes_from_plan(Plan([room], [Door("d", ["A", "X"], (2.0, -0.12), 1.0, 2.1)]))}
+    assert p["A:w0"].holes == [pytest.approx((1.5, 2.5, 0.0, 2.1))]
+    p = {q.id: q for q in planes_from_plan(Plan([room], [Door("d", [], (2.0, -0.25), 1.0, 2.1)]))}
+    assert p["A:w0"].holes == []
+    p = {q.id: q for q in planes_from_plan(Plan([room], [Door("d", ["A"], (2.0, -0.25), 1.0, 2.1)]))}
+    assert len(p["A:w0"].holes) == 1
+
+
+def test_shared_wall_points_split_by_side():
+    """두께 0 공유 벽 (x = 4): A 쪽 3.93 의 점은 A 면, B 쪽 4.07 의 점은 B 면에 맞춰짐 (예전: 모두 A 면)."""
+    from indoorgs.schemas import Plan, Room
+    A = Room("A", [(0, 0), (4, 0), (4, 3), (0, 3)], 0.0, 2.6)
+    B = Room("B", [(4, 0), (8, 0), (8, 3), (4, 3)], 0.0, 2.6)
+    pl = planes_from_plan(Plan([A, B], []))
+    rng = np.random.default_rng(0)
+
+    def sheet(x, n):
+        return np.stack([np.full(n, x) + rng.normal(0, 0.004, n), rng.uniform(0, 3, n), rng.uniform(0, 2.6, n)], 1)
+    pts = np.concatenate([sheet(3.93, 300), sheet(4.07, 900)])
+    owner = assign_points(pl, pts)
+    ids = [p.id for p in pl]
+    a, b = ids.index("A:w1"), ids.index("B:w3")
+    assert not (owner[:300] == b).any() and not (owner[300:] == a).any()      # 반대편 면으로 가는 점 없음
+    assert (owner[:300] == a).mean() > 0.8 and (owner[300:] == b).mean() > 0.8
+    fit, info = refine_planes(pl, pts)
+    F = {p.id: p for p in fit}
+    I = {i["id"]: i for i in info}
+    assert I["A:w1"]["source"] == "fit" and I["B:w3"]["source"] == "fit"
+    assert abs(F["A:w1"].point(1.5, 1.3)[0] - 3.93) < 0.01
+    assert abs(F["B:w3"].point(1.5, 1.3)[0] - 4.07) < 0.01
+    # 같은 방의 마주 보는 벽(좁은 방)은 그대로 가까운 쪽
+    C = Room("C", [(0, 0), (0.4, 0), (0.4, 3), (0, 3)], 0.0, 2.6)
+    pc = planes_from_plan(Plan([C], []))
+    o = assign_points(pc, np.array([[0.05, 1.5, 1.0], [0.35, 1.5, 1.0]]))
+    assert [pc[k].id for k in o] == ["C:w3", "C:w1"]

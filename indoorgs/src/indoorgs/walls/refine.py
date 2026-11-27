@@ -25,24 +25,32 @@ import math
 
 import numpy as np
 
-from .planes import Plane, WALL
+from .planes import Plane, WALL, better_face
 
 __all__ = ["assign_points", "refine_planes", "room_widths", "flatness", "face_coverage", "edge_distance"]
 
 
 def assign_points(planes: list[Plane], xyz: np.ndarray, search: float = 0.30, uv_margin: float = 0.10) -> np.ndarray:
-    """점마다 |부호 거리| < search 이고 면 범위(uv_margin 허용, 문 구멍 제외) 안인 면 중 가장 가까운 면 번호."""
+    """점마다 |부호 거리| < search 이고 면 범위(uv_margin 허용, 문 구멍 제외) 안인 면 중 가장 가까운 면 번호.
+    두 방이 공유하는 벽(등을 맞댄 두 면)은 거리 대신 점이 어느 쪽에 있는지로 나눔 (planes.better_face)."""
     xyz = np.asarray(xyz, float).reshape(-1, 3)
-    best = np.full(len(xyz), np.inf)
+    best_sd = np.full(len(xyz), np.nan)
     idx = np.full(len(xyz), -1, np.int64)
+    normals = np.array([p.n for p in planes], float).reshape(-1, 3)
     for k, p in enumerate(planes):
-        ad = np.abs(p.signed_dist(xyz))
-        cand = np.flatnonzero((ad < search) & (ad < best))
+        sd = p.signed_dist(xyz)
+        cand = np.flatnonzero(np.abs(sd) < search)
+        if len(cand) == 0:
+            continue
+        cur = idx[cand]
+        has = cur >= 0
+        win = better_face(sd[cand], p.n, best_sd[cand], normals[np.maximum(cur, 0)], has)
+        cand = cand[win]
         if len(cand) == 0:
             continue
         ok = p.contains_uv(p.uv(xyz[cand]), uv_margin)
         cand = cand[ok]
-        best[cand] = ad[cand]
+        best_sd[cand] = sd[cand]
         idx[cand] = k
     return idx
 

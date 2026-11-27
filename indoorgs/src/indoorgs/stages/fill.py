@@ -1,7 +1,7 @@
 """5. 보강 (담당 C). splat.ply + data_clean/ (+ plan.json) -> fill/holes_backdrop.ply
 
 tools/fill/fill_section.py(바탕층) + merge_holes.py(바탕층 중 학습 스플랫이 안 덮은 곳만 합침) 이식.
-- 면: 구간이 도면 좌표로 정합됐으면(plan.json + colmap/priors.json) 카메라가 든 방의 floor_z·ceiling_z·바닥 다각형,
+- 면: 구간이 도면 좌표로 정합됐으면(plan.json + register.json mapper = pose_prior_mapper, diagnose.model_in_plan_coords) 카메라가 든 방의 floor_z·ceiling_z·바닥 다각형,
   아니면 예전처럼 점에서 추정.
 - cfg.fill.holes_only = True(기본): 벽 바탕층은 빼고 바닥·천장 구멍만. False 면 벽도 구멍이면 넣음.
 - 결과 = 학습 스플랫 전부 + 고른 바탕층 (학습 PLY 의 속성 순서·주석 그대로).
@@ -40,7 +40,8 @@ def model_dirs(ctx: StageContext) -> tuple[Path | None, Path]:
 
 
 def in_plan_coords(ctx: StageContext) -> bool:
-    return ctx.project.has_space and ctx.paths.priors.exists()
+    from .diagnose import model_in_plan_coords
+    return ctx.project.has_space and model_in_plan_coords(ctx)
 
 
 def make_fill(train: plyio.GaussianPly, model: Path, image_dir: Path, plan: schemas.Plan | None,
@@ -90,7 +91,8 @@ class Fill(Stage):
             plan = schemas.load_plan(ctx.project.plan_json)
             ctx.log("도면 좌표 구간: 바닥·천장을 plan.json 방에서 정함")
         elif ctx.project.has_space:
-            ctx.log("plan.json 은 있지만 이 구간은 도면 좌표로 정합 안 됨(priors.json 없음) -> 점에서 추정")
+            ctx.log("plan.json 은 있지만 이 구간은 도면 좌표로 정합 안 됨(register.json mapper 가 pose_prior_mapper 아님)"
+                    " -> 점에서 추정")
         try:
             train = plyio.read(src)
             out, info = make_fill(train, model, image_dir, plan, ctx.project.cfg.fill.holes_only, ctx.log)

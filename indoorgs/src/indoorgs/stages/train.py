@@ -129,7 +129,13 @@ class Train(Stage):
             return StageResult(False, f"프리셋 없음: {cfg.train.preset} (가능: {list(presets)})")
         preset = presets[cfg.train.preset]
         # data_seed(벽 면에 초기 점을 심은 것, stages/walls.py) > data_clean > data
-        data_dir = next((d for d in (p.data_seed, p.data_clean) if (d / "sparse" / "0").exists()), p.data)
+        # data_seed 는 지금 설정·좌표에서 벽 기능이 켜져 있고 지금 data_clean 에서 만든 것일 때만 (stages/walls.seed_usable)
+        from .walls import seed_usable
+        use_seed, why = seed_usable(ctx)
+        if not use_seed and (p.data_seed / "sparse" / "0").exists():
+            ctx.log(f"data_seed 안 씀: {why} -> data_clean 로 학습")
+        cands = ((p.data_seed,) if use_seed else ()) + (p.data_clean,)
+        data_dir = next((d for d in cands if (d / "sparse" / "0").exists()), p.data)
         if data_dir == p.data_seed:
             ctx.log("data_seed (벽 면 초기 점 포함) 로 학습")
         if data_dir == p.data:

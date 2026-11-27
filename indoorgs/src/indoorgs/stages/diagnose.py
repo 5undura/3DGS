@@ -80,9 +80,15 @@ def link_images(src: Path, dst: Path) -> str:
     return "symlink"
 
 
-def model_in_plan_coords(ctx: StageContext) -> bool:
-    info = ctx.paths.colmap / "register.json"
+def paths_in_plan_coords(paths) -> bool:
+    """구간 모델이 도면 좌표인지 (register.json mapper == pose_prior_mapper). 모든 단계가 이 판정 하나만 씀
+    (diagnose 공간 검사, walls·snap, fill 바닥·천장, merge 배치). priors.json 이 있어도 mapper 로 바뀌었으면 아님."""
+    info = paths.colmap / "register.json"
     return info.exists() and schemas.read_json(info).get("mapper") == "pose_prior_mapper"
+
+
+def model_in_plan_coords(ctx: StageContext) -> bool:
+    return paths_in_plan_coords(ctx.paths)
 
 
 def diagnose_model(m: cmodel.Model, plan=None, priors: dict | None = None) -> dict:

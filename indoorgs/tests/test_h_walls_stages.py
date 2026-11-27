@@ -158,3 +158,210 @@ def test_repair_stage_fills_hole(tmp_path):
     assert north["hole_m2_before"] > 0.1 and north["hole_m2_after"] < 0.02
     from indoorgs.stages import fill
     assert fill.train_ply(ctx).name == snap_stage.REPAIR_PLY
+
+
+# ---------------- 11-28 검토 회귀 ----------------
+import os
+
+
+def _wall_ply(extra=None):
+    rng = np.random.default_rng(5)
+    n = 2000
+    P = np.column_stack([rng.uniform(0.5, 5.5, n), TRUE_NORTH_Y + rng.uniform(-0.01, 0.01, n), rng.uniform(0.3, 2.3, n)])
+    if extra is not None:
+        P = np.vstack([P, extra])
+    ply = plyio.make(len(P), plyio.brush_names(2))
+    for k, c in enumerate("xyz"):
+        ply.data[c] = P[:, k]
+    ply.data["rot_0"] = 1.0
+    for k in range(3):
+        ply.data[f"scale_{k}"] = np.log(0.02)
+    ply.data["opacity"] = 3.0
+    return ply
+
+
+def test_snap_stage_uses_only_fitted_faces(tmp_path):
+    """천장은 정합 점이 없어 도면 그대로(2.6 m). 실제 천장 스플랫(2.8 m)을 지우거나 2.6 m 로 끌어내리지 않음."""
+    p, ctx, logs = setup(tmp_path, extra="walls: {seed: false}\n")
+    assert walls_stage.Walls().run(ctx).ok
+    fit = {i["id"]: i["source"] for i in schemas.read_json(ctx.paths.planes_json)["fit"]}
+    assert fit["A:ceiling"] == "plan" and fit["A:w2"] == "fit"
+    rng = np.random.default_rng(6)
+    ceil = np.column_stack([rng.uniform(0.3, 5.7, 3000), rng.uniform(0.3, 2.7, 3000), np.full(3000, 2.8)])
+    run = ctx.paths.train_run("brush", "default")
+    plyio.write(run / "splat.ply", _wall_ply(ceil))
+    res = snap_stage.Snap().run(ctx)
+    assert res.ok, res.message
+    out = plyio.read(run / snap_stage.SNAP_PLY)
+    assert np.sum(np.abs(out.data["z"] - 2.8) < 1e-6) == 3000           # 실제 천장 그대로
+    info = schemas.read_json(run / snap_stage.SNAP_JSON)
+    assert "A:ceiling" not in info["planes_used"] and "A:w2" in info["planes_used"]
+    assert "A:ceiling" in info["unfitted_planes"]
+    assert "A:floor" not in info["planes_used"]                            # 바닥 스플랫 없음 -> 밀도 확인 실패
+    assert any("맞추지 못한 면" in m for m in logs)
+
+
+def test_snap_stage_skips_ply_not_in_plan_coords(tmp_path):
+    p, ctx, logs = setup(tmp_path, extra="walls: {seed: false}\n")
+    assert walls_stage.Walls().run(ctx).ok
+    run = ctx.paths.train_run("brush", "default")
+    ply = _wall_ply()
+    ply.data["x"] += 40.0
+    plyio.write(run / "splat.ply", ply)
+    st = snap_stage.Snap()
+    res = st.run(ctx)
+    assert res.ok and res.skipped and not (run / snap_stage.SNAP_PLY).exists()
+    assert st.is_done(ctx)
+    rep = snap_stage.Repair()
+    assert rep.is_done(ctx)
+    r2 = rep.run(ctx)
+    assert r2.ok and r2.skipped
+    from indoorgs.stages import fill
+    assert fill.train_ply(ctx).name == "splat.ply"
+
+
+def test_repair_without_planes_json(tmp_path):
+    p, ctx, _ = setup(tmp_path, extra="walls: {seed: false}\n")
+    run = ctx.paths.train_run("brush", "default")
+    plyio.write(run / snap_stage.SNAP_PLY, _wall_ply())
+    res = snap_stage.Repair().run(ctx)
+    assert not res.ok and "planes.json" in res.message
+
+
+def _touch(path, t):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_bytes(b"x")
+    os.utime(path, (t, t))
+
+
+def test_best_ply_respects_mtime_and_config(tmp_path):
+    p, ctx, _ = setup(tmp_path)
+    run = ctx.paths.train_run("brush", "default")
+    base_t = 1_700_000_000
+    _touch(run / "splat.ply", base_t)
+    _touch(run / snap_stage.SNAP_PLY, base_t + 10)
+    _touch(run / snap_stage.REPAIR_PLY, base_t + 20)
+    from indoorgs.stages import fill, merge
+    assert fill.train_ply(ctx).name == snap_stage.REPAIR_PLY
+    _touch(run / snap_stage.SNAP_PLY, base_t + 30)                     # snap 을 다시 돌림 -> repaired 는 낡음
+    assert fill.train_ply(ctx).name == snap_stage.SNAP_PLY
+    _touch(run / "splat.ply", base_t + 40)                              # 학습 결과를 바꿈 -> 둘 다 낡음
+    assert fill.train_ply(ctx).name == "splat.ply"
+    assert merge.section_ply(p, ctx.section, ctx.paths).name == "splat.ply"
+    _touch(run / snap_stage.SNAP_PLY, base_t + 50)
+    _touch(run / snap_stage.REPAIR_PLY, base_t + 60)
+    assert snap_stage.best_ply(run, True, False).name == snap_stage.SNAP_PLY    # repair 꺼짐
+    p2, ctx2, _ = setup(tmp_path / "b", extra="walls: {snap: false}\n")
+    run2 = ctx2.paths.train_run("brush", "default")
+    for i, nm in enumerate(("splat.ply", snap_stage.SNAP_PLY, snap_stage.REPAIR_PLY)):
+        _touch(run2 / nm, base_t + i)
+    assert fill.train_ply(ctx2).name == "splat.ply"                    # 설정이 꺼지면 예전 결과 안 씀
+    (ctx2.paths.colmap / "register.json").write_text(json.dumps({"version": 1, "mapper": "mapper"}))
+    assert fill.train_ply(ctx2).name == "splat.ply"
+
+
+def test_snap_repair_is_done_and_prev_targets(tmp_path):
+    p, ctx, _ = setup(tmp_path, extra="walls: {seed: false}\n")
+    assert walls_stage.Walls().run(ctx).ok
+    run = ctx.paths.train_run("brush", "default")
+    t0 = ctx.paths.planes_json.stat().st_mtime + 10
+    for i, nm in enumerate(("splat.ply", snap_stage.SNAP_PLY, snap_stage.SNAP_JSON,
+                            snap_stage.REPAIR_PLY, snap_stage.REPAIR_JSON)):
+        _touch(run / nm, t0 + i)
+    sn, rp = snap_stage.Snap(), snap_stage.Repair()
+    assert sn.is_done(ctx) and rp.is_done(ctx)
+    names = {q.name for q in sn.prev_targets(ctx)}
+    assert {snap_stage.REPAIR_PLY, snap_stage.REPAIR_JSON, snap_stage.SNAP_PLY} <= names
+    _touch(run / snap_stage.SNAP_PLY, t0 + 100)
+    assert not rp.is_done(ctx)
+    _touch(run / "splat.ply", t0 + 200)
+    assert not sn.is_done(ctx)
+
+
+def test_train_uses_data_seed_only_when_valid(tmp_path, monkeypatch):
+    p, ctx, logs = setup(tmp_path)
+    monkeypatch.setattr(seed_mod, "seed_points",
+                        lambda planes, model, image_dir, **kw: (np.zeros((0, 3)), np.zeros((0, 3), np.uint8), {}))
+    assert walls_stage.Walls().run(ctx).ok
+    assert (ctx.paths.data_seed / "sparse" / "0").exists()
+    ok, why = walls_stage.seed_usable(ctx)
+    assert ok, why
+    # 설정을 끔 -> 안 씀
+    p2 = Project(p.root)
+    p2.cfg.walls.seed = False
+    ok, why = walls_stage.seed_usable(StageContext(p2, ctx.section, ctx.paths, logs.append))
+    assert not ok and "seed" in why
+    # 도면 좌표가 아니게 됨 -> 안 씀
+    reg = ctx.paths.colmap / "register.json"
+    reg.write_text(json.dumps({"version": 1, "mapper": "mapper"}))
+    assert not walls_stage.seed_usable(ctx)[0]
+    reg.write_text(json.dumps({"version": 1, "mapper": "pose_prior_mapper"}))
+    # data_clean 이 바뀜 (diagnose 다시) -> 안 씀
+    m = cm.read_model(ctx.paths.data_clean / "sparse" / "0")
+    new, _ = cm.remove_images(m, {next(iter(m.images.values())).name})
+    import shutil
+    shutil.rmtree(ctx.paths.data_clean / "sparse" / "0")
+    cm.write_model(new, ctx.paths.data_clean / "sparse" / "0")
+    ok, why = walls_stage.seed_usable(ctx)
+    assert not ok and "다름" in why
+
+
+def test_train_stage_falls_back_to_data_clean(tmp_path, monkeypatch):
+    """Train.run 이 쓸모없는 data_seed 대신 data_clean 을 학습기에 넘기는지 (학습기 명령만 가로챔)."""
+    from indoorgs.stages import train as train_stage
+    from indoorgs.trainers import REGISTRY
+    p, ctx, logs = setup(tmp_path, extra="walls: {seed: false}\n")
+    (ctx.paths.data_seed / "sparse" / "0").mkdir(parents=True)        # 예전 실행이 남긴 data_seed
+    seen = {}
+    ad = REGISTRY[p.cfg.train.trainer]
+
+    class Info:
+        found, missing_options, version, message = True, [], "x", ""
+    monkeypatch.setattr(ad, "detect", lambda exe: Info())
+
+    def fake_cmd(exe, data_dir, out_dir, preset, gpu):
+        seen["data"] = data_dir
+        raise RuntimeError("stop")
+    monkeypatch.setattr(ad, "command", fake_cmd)
+    try:
+        train_stage.Train().run(ctx)
+    except RuntimeError:
+        pass
+    assert seen["data"] == ctx.paths.data_clean
+    assert any("data_seed 안 씀" in m for m in logs)
+
+
+def test_rerun_moves_walls_outputs_when_walls_no_longer_applies(tmp_path, monkeypatch):
+    """register 를 다시 돌려 도면 좌표가 아니게 되면 walls/·data_seed 는 Walls 가 적용 안 돼도 _prev_ 로 옮겨짐."""
+    p, ctx, _ = setup(tmp_path)
+    ctx.paths.walls.mkdir(parents=True)
+    ctx.paths.planes_json.write_text("{}")
+    (ctx.paths.data_seed / "sparse" / "0").mkdir(parents=True)
+    (ctx.paths.colmap / "register.json").write_text(json.dumps({"version": 1, "mapper": "mapper"}))
+    monkeypatch.setattr(base, "all_stages", lambda: [walls_stage.Walls()])
+    base.run_all(p, rerun="walls", echo=None)
+    assert not ctx.paths.walls.exists() and not ctx.paths.data_seed.exists()
+    left = [q.name for q in ctx.paths.root.iterdir()]
+    assert any(n.startswith("walls_prev_") for n in left) and any(n.startswith("data_seed_prev_") for n in left)
+
+
+def test_plan_coords_same_rule_for_all_stages(tmp_path):
+    """fill·merge 도 diagnose 와 같은 판정 (register.json mapper). priors.json 이 남아 있어도 mapper 면 도면 좌표 아님."""
+    from indoorgs.stages import fill, diagnose
+    p, ctx, _ = setup(tmp_path)
+    schemas.write_json(ctx.paths.priors, {"version": 1, "coordinate_system": "CARTESIAN", "frames": []})
+    (ctx.paths.colmap / "register.json").write_text(json.dumps({"version": 1, "mapper": "mapper"}))
+    assert not diagnose.model_in_plan_coords(ctx) and not fill.in_plan_coords(ctx)
+    ctx.paths.priors.unlink()
+    (ctx.paths.colmap / "register.json").write_text(json.dumps({"version": 1, "mapper": "pose_prior_mapper"}))
+    assert fill.in_plan_coords(ctx)
+    # merge: 도면 좌표가 아닌 구간은 floorplan 배치로 치지 않음 (구간 하나면 single)
+    run = ctx.paths.train_run("brush", "default")
+    plyio.write(run / "splat.ply", _wall_ply())
+    (ctx.paths.colmap / "register.json").write_text(json.dumps({"version": 1, "mapper": "mapper"}))
+    schemas.write_json(ctx.paths.priors, {"version": 1, "coordinate_system": "CARTESIAN", "frames": []})
+    from indoorgs.stages import merge
+    res = merge.Merge().run(StageContext(p, None, None, lambda m: None))
+    assert res.ok, res.message
+    assert schemas.read_json(p.layout_json)["sections"]["s1"]["source"] == "single"

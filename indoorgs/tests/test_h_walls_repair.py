@@ -170,3 +170,35 @@ def test_no_holes_no_change():
     out, info = repair.repair_faces(ply2, [wall], rng=0)
     assert out.comments == ["comment x"]
     assert info["faces"]["A:w0"]["hole_m2_after"] == 0
+
+
+# ---------------- 11-28 검토 회귀 ----------------
+def test_tilted_real_wall_is_not_a_hole():
+    """실제 벽이 면과 1.5~2도 기울어 band(6 cm) 밖으로 나가도 ±0.3 m 안에서 덮였으면 구멍 아님
+    (예전: 실제 벽 앞 몇 cm 에 두 번째 벽을 지음)."""
+    from indoorgs.walls.planes import Plane, WALL
+    names = plyio.brush_names(2)
+    L, H = 6.0, 2.6
+    plan_pl = Plane("A:w0", WALL, "A", np.array([0, 1., 0]), 0.0, np.zeros(3), np.array([1., 0, 0]),
+                    np.array([0, 0, 1.]), (L, H))
+    t = np.radians(2.0)
+    Ut, nt = np.array([np.cos(t), np.sin(t), 0]), np.array([-np.sin(t), np.cos(t), 0])
+    true_pl = Plane("t", WALL, "A", nt, 0.0, np.zeros(3), Ut, np.array([0, 0, 1.]), (L, H))
+    uu, vv = np.meshgrid(np.arange(0.015, L, 0.03), np.arange(0.015, H, 0.03))
+    P = true_pl.point(uu.ravel(), vv.ravel())
+    ply = plyio.make(len(P), names)
+    for i, c in enumerate("xyz"):
+        ply.data[c] = P[:, i]
+    q = plyio.mat_to_quat(np.stack([Ut, np.array([0, 0, 1.]), np.cross(Ut, [0, 0, 1.])], 1))
+    for i in range(4):
+        ply.data[f"rot_{i}"] = q[i]
+    ply.data["scale_0"] = ply.data["scale_1"] = np.log(0.025)
+    ply.data["scale_2"] = np.log(0.002)
+    ply.data["opacity"] = 3.0
+    cams = np.array([[x, 1.2, 1.4] for x in np.linspace(0.3, 5.7, 20)])
+    out, info = repair.repair_faces(ply, [plan_pl], cameras=cams, max_hole_m2=None)
+    fi = info["faces"]["A:w0"]
+    assert info["n_added"] == 0 and fi["hole_m2_before"] == 0
+    assert fi["covered_off_plane_m2"] > 1.0
+    _, old = repair.repair_faces(ply, [plan_pl], cameras=cams, max_hole_m2=None, hole_search=None)
+    assert old["n_added"] > 0                                  # 예전 동작: 두 번째 벽

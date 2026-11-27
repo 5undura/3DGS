@@ -124,6 +124,7 @@ def space_project(tmp_path, names):
         "doors": [{"id": "AB", "rooms": ["A", "B"], "center": [0, 0], "width": 1.0, "height": 2.1}]})
     for n in names:
         schemas.write_json(pr.section(n).priors, {"version": 1, "coordinate_system": "CARTESIAN", "frames": []})
+        schemas.write_json(pr.section(n).colmap / "register.json", {"version": 1, "mapper": "pose_prior_mapper"})
     return Project(pr.root)
 
 

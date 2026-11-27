@@ -147,11 +147,17 @@ register는 이걸 COLMAP DB `pose_priors` 표에 넣고 `pose_prior_mapper`를 
 
 - 면: `n·x = d`, n 은 방 안쪽. 벽은 방 다각형의 변 하나, 바닥·천장은 방 하나 (`walls/planes.py`).
 - `planes`는 정합 점으로 다시 맞춘 면(점이 모자라면 도면 그대로, `source: "plan"`), `plan_planes`는 도면 그대로.
-- `data_seed/`: `data_clean/`과 같은 사진(링크) + `sparse/0`에 면 위 초기 점(색은 사진에서, 트랙 없음)을 더한 모델. train은 `data_seed` > `data_clean` > `data` 순으로 읽는다.
+- `data_seed/`: `data_clean/`과 같은 사진(링크) + `sparse/0`에 면 위 초기 점(색은 사진에서, 트랙 없음)을 더한 모델. 초기 점은 맞춘 면(`fit[].source == "fit"`)에만.
+  train은 `data_seed` > `data_clean` > `data` 순으로 읽되, `data_seed`는 walls 가 이 구간에 적용(`walls.enabled`, 도면 좌표)되고 `walls.seed`가 켜져 있고
+  `source_identity`(`{"n_images", "images_bin_sha1"}`, 만든 원본 모델)가 지금 `data_clean`(없으면 `data`) 모델과 같을 때만 쓴다.
+- snap·repair 는 맞춘 면만 쓴다 (도면 그대로인 면은 실제 위치를 모름). `--rerun` 이 앞 단계부터면 walls·snap·repair 는 적용 안 돼도 이전 결과를 `_prev_`로 옮긴다.
+- "도면 좌표인가"는 모든 단계에서 `stages.diagnose.model_in_plan_coords` (= `register.json` mapper) 하나로 판정한다.
 
 ### train/<run>/splat_walls.ply, walls.json (snap이 씀)
 
-벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안의 스플랫을 면 위로 옮겨 법선 방향으로 납작하게 한 PLY. 속성 순서는 원본 그대로. `walls.json`에 붙인 수·지운 수·벽 평탄도(불투명 스플랫의 면까지 거리 RMS) 전후. fill·merge는 `splat_walls.ply`가 있으면 그것을 쓴다.
+벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안의 스플랫을 면 위로 옮겨 법선 방향으로 납작하게 한 PLY. 속성 순서는 원본 그대로. `walls.json`에 붙인 수·지운 수·벽 평탄도(불투명 스플랫의 면까지 거리 RMS) 전후, 쓴 면(`planes_used`), 경고(`warnings`).
+불투명 스플랫 절반 넘게 도면 방 밖이면 PLY 없이 `walls.json`에 `"skipped": "<이유>"`만 쓴다.
+fill·merge는 `splat_repaired.ply` > `splat_walls.ply` > `splat.ply` 중 설정이 켜져 있고 입력보다 새것(시각 repaired ≥ walls ≥ splat.ply)을 쓴다.
 
 ### train/<trainer>_<preset>/eval.json, stats.json (train이 씀)
 
