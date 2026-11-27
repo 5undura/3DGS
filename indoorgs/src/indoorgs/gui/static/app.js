@@ -57,6 +57,11 @@ let runTimer = 0, curLog = '';
 function initRun() {
   $('#run-until').innerHTML += state.project.stages.map(s => `<option value="${s}">${s}</option>`).join('');
   $('#run-all').onclick = () => startRun(null);
+  $('#run-cancel').onclick = async () => {
+    if (!confirm('실행을 멈출까요? 지금 돌고 있는 단계는 실패로 남고, 다음 실행 때 그 단계부터 이어서 합니다.')) return;
+    try { await api('/api/run/cancel', { method: 'POST' }); toast('중지 요청함'); refreshRun(); }
+    catch (e) { toast(e.message, true); }
+  };
   $('#run-log').onchange = e => { curLog = e.target.value; refreshLog(); };
   setInterval(() => { if (state.tab === 'run') refreshRun(); }, 2000);
 }
@@ -83,6 +88,7 @@ async function refreshRun() {
   $('#run-grid').querySelectorAll('[data-run]').forEach(b => b.onclick = () => startRun(b.dataset.run));
   $('#run-grid').querySelectorAll('[data-log]').forEach(td => td.onclick = () => { curLog = td.dataset.log; $('#run-log').value = curLog; refreshLog(); });
   $('#run-all').disabled = st.running;
+  $('#run-cancel').disabled = !rs.running;
   $('#run-state').textContent = rs.running ? `실행 중 (${rs.section || '전체'}${rs.until ? ` · ${rs.until}까지` : ''}, ${rs.started} 시작)`
     : rs.finished ? `마지막 실행: ${rs.ok ? '성공' : '실패'} · ${rs.finished}${rs.error ? ' · ' + rs.error : ''}` : '';
   // 로그 목록 (가장 최근 것 기본)

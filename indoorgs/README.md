@@ -5,10 +5,10 @@
 **설치·사용법: [`docs/USAGE.md`](docs/USAGE.md)** (Windows, 더블클릭 `windows/install.bat` → `new_project.bat` → `IndoorGS.bat`).
 실제 PC 에서 확인할 것: [`docs/PC_CHECKLIST.md`](docs/PC_CHECKLIST.md).
 
-지금 상태 (2026-11-27): **1차 4명(A 코어·CLI, B 공간, C 보강·합치기, D GUI) 작업이 합쳐짐**, 2차(E GUI↔공간 도구, F SH 회전·재실행, G 설치·문서) 진행 중.
+지금 상태 (2026-11-27): **1차(A 코어·CLI, B 공간, C 보강·합치기, D GUI) + 2차(E 도면 불러오기·검사, F SH 회전·재실행·취소, G 설치·문서) 모두 합쳐짐.**
 - 추출 → 동선 위치 → 정합 → 진단 → 학습(Brush·LichtFeld) → 보강 → 합치기 → 보고서 단계가 모두 코드로 있음
-- 로컬 웹 화면 5개(프로젝트·공간·동선·실행·결과), 도구 자동 찾기(`init`·`check`), Windows 더블클릭 bat
-- 테스트 137개 통과 (리눅스, 가짜 COLMAP·학습기). **실제 촬영 데이터·Windows 도구로는 아직 끝까지 안 돌려 봄**
+- 로컬 웹 화면 5개(프로젝트·공간·동선·실행·결과), DXF·SVG·도면 사진 불러오기, 실행 중지, 도구 자동 찾기(`init`·`check`), Windows 더블클릭 bat
+- 테스트 159개 통과 (리눅스, 가짜 COLMAP·학습기). **실제 촬영 데이터·Windows 도구로는 아직 끝까지 안 돌려 봄** → `docs/PC_CHECKLIST.md`
 
 개발자용 (터미널):
 ```
