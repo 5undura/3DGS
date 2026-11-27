@@ -10,7 +10,7 @@
 - [x] 2단계 재정합 (sequential + loop, global / incremental) → global 못 씀, **incremental 이 원래보다 나음** (아래 표)
 - [x] 3단계 Brush 2560 → 1920 과 PSNR 같음 (해상도는 병목 아님)
 - [x] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
-- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 PPISP → exposure-correction) 차이 없음. L4(2560) 더 나쁨(-0.11) → 1920 유지. L5(400만) 차이 없음 → 300만 유지. L6(50,000회) 진행 중
+- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L1(pose-opt) +0.28, **L2(+mrnf) 26.51 / 반투명 63% = 지금까지 최고**. L3(노출 보정 PPISP → exposure-correction) 차이 없음. L4(2560) 더 나쁨(-0.11) → 1920 유지. L5(400만) 차이 없음 → 300만 유지. **L6(50,000회) 26.70 / 반투명 55.7% = 지금까지 최고**. L7(80,000회) 진행 중
 
 ## 도구 확인 (2026-11-27)
 | 도구 | 버전 | train_all / register_all 옵션 대조 |
@@ -119,3 +119,11 @@
 - L5 (L3 + 상한 400만): 26.54 / 0.881, L3 대비 +0.02 (차이 없음). 반투명 60.9 → 66.2% 로 오히려 늘어남. 48분
   - 스플랫 수를 늘려도 이득 없음, VR 렌더 부담만 커짐 → **300만 유지**
   - 다음: L6 = L3 + 학습 30,000 → 50,000회. 동시에 CPU 로 L3 PLY 에 바닥 구멍만 메우는 backdrop(merge_holes) 적용
+- L3 + 바닥·천장 구멍만 backdrop (CPU, 학습 없음): `F:\Sample\4차\up\1c_lfs_poseopt_mrnf_expcorr_fill\holes_backdrop.ply` (+35,750, 반경 배수 3)
+  - backdrop 은 `fill_section.py` 로 같은 정합에서 새로 만듦 (`1b_origskip\data_fill_lfs`, 31초). 벽 바탕층 13만 개는 제외
+  - 시행착오: Brush PLY 는 x,y,z 가 **맨 뒤**(f_dc, f_rest, opacity, rot, scale, xyz), LichtFeld PLY 는 **맨 앞**(xyz, nx..nz, ...) →
+    앞 3열을 좌표로 읽어 "좌표계가 다르다"고 잘못 판단했음. 속성 이름으로 읽으면 Brush·LichtFeld·COLMAP 모두 같은 좌표계 (최근접 0.002)
+    merge_holes.py / merge_ply 의 read 는 이름으로 읽으므로 LichtFeld PLY 에도 그대로 쓸 수 있음
+- L6 (L3 + 학습 50,000회): **26.70 / 0.882**, L3 대비 +0.17 (69% 사진 개선). 반투명 60.9 → **55.7%**. 70분
+  - **지금까지 최고**: `F:\Sample\4차\up\1c_lfs_poseopt_mrnf_expcorr_50k\splat_50000.ply`
+  - 다음: L7 = 학습 80,000회 (더 늘려도 오르는지 확인)
