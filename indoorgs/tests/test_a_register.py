@@ -103,3 +103,27 @@ def test_register_no_colmap(tmp_path):
     root = make_project(tmp_path / "p", colmap=False)
     ctx, _ = ctx_of(root)
     assert "COLMAP 없음" in Register().run(ctx).message
+
+
+def test_register_loop_detection_offline_fallback(tmp_path, monkeypatch):
+    """어휘 트리를 못 받으면(오프라인) loop_detection 0 으로 한 번 더."""
+    root = make_project(tmp_path / "p")
+    ctx, logs = ctx_of(root)
+    h = colmap_handlers()
+    h["sequential_matcher"] = lambda cmd: 1 if arg(cmd, "--SequentialMatching.loop_detection") == "1" else 0
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    assert Register().run(ctx).ok
+    assert fake.names()[:3] == ["feature_extractor", "sequential_matcher", "sequential_matcher"]
+    assert arg(fake.calls[2], "--SequentialMatching.loop_detection") == "0"
+    assert "--SequentialMatching.vocab_tree_path" not in fake.calls[1]
+    assert any("loop_detection 0" in m for m in logs)
+
+
+def test_register_vocab_tree_path(tmp_path, monkeypatch):
+    root = make_project(tmp_path / "p", extra_yaml="register: {vocab_tree: C:/tools/vocab.bin}\n")
+    ctx, _ = ctx_of(root)
+    fake = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake)
+    assert Register().run(ctx).ok
+    assert arg(fake.calls[1], "--SequentialMatching.vocab_tree_path") == "C:/tools/vocab.bin"

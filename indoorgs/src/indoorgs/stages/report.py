@@ -56,7 +56,8 @@ def _train_runs(sp, train_cfg=None) -> list[dict]:
             if ev is None and stt is None and not (d / "splat.ply").exists():
                 continue
             runs.append({"name": d.name, "trainer": d.name.split("_")[0], "eval": ev, "stats": stt,
-                         "ply": (d / "splat.ply").exists(), "latest": d == latest})
+                         "ply": (d / "splat.ply").exists(), "latest": d == latest,
+                         "walls": _read(d / "walls.json")})
     return runs
 
 
@@ -69,7 +70,8 @@ def collect(project) -> dict:
         pri = _read(sp.priors)
         path = _read(sp.path_json)
         secs.append({"name": sec.name, "video": sec.video, "frames": done, "diagnose": diag,
-                     "priors": pri, "path": path, "runs": _train_runs(sp, project.cfg.train)})
+                     "priors": pri, "path": path, "runs": _train_runs(sp, project.cfg.train),
+                     "planes": _read(sp.planes_json)})
     plan = None
     if project.has_space:
         try:
@@ -200,6 +202,28 @@ def build_html(project) -> str:
                               f"동선에서 멂 {len(dg.get('far_from_prior', []))}</li>")
     diag = "<ul>" + "".join(diag_notes) + "</ul>" if diag_notes else f"<p>{NONE}</p>"
 
+    wall_notes = []
+    for s in secs:
+        pj = s.get("planes")
+        if pj:
+            fit = pj.get("fit", [])
+            nf = sum(1 for i in fit if i.get("source") == "fit")
+            big = [i for i in fit if i.get("source") == "fit" and abs(i.get("shift_m") or 0) >= 0.05]
+            txt = (f"{_e(s['name'])}: 면 {len(fit)}개 중 {nf}개를 정합 점으로 다시 맞춤"
+                   + (f", 도면과 5cm 넘게 다른 면 " + ", ".join(f"{_e(i['id'])} {i['shift_m'] * 100:+.0f}cm" for i in big)
+                      if big else "")
+                   + (f", 초기 점 {_num((pj.get('seed') or {}).get('n_added'))}개" if pj.get("seed") else ""))
+            wall_notes.append(f"<li>{txt}</li>")
+        for r in s["runs"]:
+            w = r.get("walls")
+            if w:
+                fb, fa = w.get("flatness_before") or {}, w.get("flatness_after") or {}
+                wall_notes.append(
+                    f"<li>{_e(s['name'])} / {_e(r['name'])}: 벽 평탄도(두께 포함 RMS) "
+                    f"{_num((fb.get('thick_m') or 0) * 100, '{:.1f}')} → {_num((fa.get('thick_m') or 0) * 100, '{:.1f}')} cm, "
+                    f"붙임 {_num(w.get('n_moved'))}, 부유물 지움 {_num(w.get('n_removed'))}</li>")
+    walls_html = "<ul>" + "".join(wall_notes) + "</ul>" if wall_notes else f"<p>{NONE} (도면 좌표 정합일 때만)</p>"
+
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8"><title>IndoorGS 보고서 · {_e(project.root.name)}</title>
@@ -208,6 +232,7 @@ def build_html(project) -> str:
 <h2>구간</h2>{table}
 <p class="sub">반투명 비율 = 불투명도 0.5 미만 스플랫 비율. {TRANSLUCENT_WARN:.0%} 이상이면 VR 에서 벽이 비칠 수 있음.</p>
 <h2>정합 검사</h2>{diag}
+<h2>벽 평탄화</h2>{walls_html}
 <h2>공간과 카메라 위치</h2>{space}
 <h2>합치기</h2><p>{merged}</p>
 </body></html>

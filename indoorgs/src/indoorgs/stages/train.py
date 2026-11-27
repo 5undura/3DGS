@@ -128,7 +128,10 @@ class Train(Stage):
         if cfg.train.preset not in presets:
             return StageResult(False, f"프리셋 없음: {cfg.train.preset} (가능: {list(presets)})")
         preset = presets[cfg.train.preset]
-        data_dir = p.data_clean if (p.data_clean / "sparse" / "0").exists() else p.data
+        # data_seed(벽 면에 초기 점을 심은 것, stages/walls.py) > data_clean > data
+        data_dir = next((d for d in (p.data_seed, p.data_clean) if (d / "sparse" / "0").exists()), p.data)
+        if data_dir == p.data_seed:
+            ctx.log("data_seed (벽 면 초기 점 포함) 로 학습")
         if data_dir == p.data:
             ctx.log("참고: data_clean 없음 -> data 로 학습")
         if not (data_dir / "sparse" / "0").exists():

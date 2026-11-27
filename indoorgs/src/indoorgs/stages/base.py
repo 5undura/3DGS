@@ -78,9 +78,9 @@ def file_logger(path: Path, echo: Callable[[str], None] | None = print) -> Calla
 
 
 def all_stages() -> list[Stage]:
-    from . import extract, prior, register, diagnose, train, fill, merge, report
-    return [extract.Extract(), prior.Prior(), register.Register(), diagnose.Diagnose(),
-            train.Train(), fill.Fill(), merge.Merge(), report.Report()]
+    from . import extract, prior, register, diagnose, walls, train, snap, fill, merge, report
+    return [extract.Extract(), prior.Prior(), register.Register(), diagnose.Diagnose(), walls.Walls(),
+            train.Train(), snap.Snap(), fill.Fill(), merge.Merge(), report.Report()]
 
 
 def status(project: Project) -> list[tuple[str, str, str]]:

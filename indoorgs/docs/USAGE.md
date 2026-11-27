@@ -65,7 +65,9 @@ GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있
 ## 7. 실행
 
 **실행** 화면 → **전체 실행** (또는 구간별, "~까지"로 중간에서 멈추기).
-순서: 프레임 추출 → (동선 위치) → 정합 → 진단(순간이동 사진 빼기) → 학습 → 보강(바닥·천장 구멍) → 합치기 → 보고서.
+순서: 프레임 추출 → (동선 위치) → 정합 → 진단(순간이동 사진 빼기) → (벽 면 맞추기·초기 점 심기) → 학습 → (벽에 붙이기) → 보강(바닥·천장 구멍) → 합치기 → 보고서.
+- 괄호 단계는 공간 + 동선이 있어 도면 좌표로 정합됐을 때만 돎. 벽 평탄화는 `project.yaml` 의 `walls:` 로 끄고 켬
+  (`enabled`, `seed`, `snap`, `band`, `remove_behind`, 기본 모두 켬). 원본 `splat.ply` 는 그대로 두고 `splat_walls.ply` 를 따로 만듦
 - 끝난 단계는 다시 안 돌림. 중간에 꺼도 다음에 이어서 실행
 - 로그는 화면 아래, 파일은 `logs\<구간>_<단계>.log`
 - 학습 시간(3060 Ti, 복도 1): Brush default 약 36분, LichtFeld default 약 1.5시간. 추출·정합은 따로
@@ -73,7 +75,7 @@ GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있
 ## 8. 결과 확인
 
 - **결과** 화면 = `report.html`: 구간별 프레임 수, 정합 장수, PSNR, 반투명 비율, 도면 위 카메라 위치
-- 구간 PLY: `sections\<구간>\train\<학습기>_<프리셋>\splat.ply`, 구멍 메운 것 `sections\<구간>\fill\holes_backdrop.ply`
+- 구간 PLY: `sections\<구간>\train\<학습기>_<프리셋>\splat.ply` (벽에 붙인 것 `splat_walls.ply`), 구멍 메운 것 `sections\<구간>\fill\holes_backdrop.ply`
 - 건물 하나: `merged\building.ply`
 - 보기: [SuperSplat](https://superspl.at/editor) 에 PLY 끌어다 놓기 (브라우저, 무료). VR 은 Unity(AVT 저장소)에서
 

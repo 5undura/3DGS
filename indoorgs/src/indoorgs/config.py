@@ -40,6 +40,7 @@ class RegisterCfg:
     camera_model: str = "OPENCV"
     seq_overlap: int = 20             # sequential 일 때 앞뒤 몇 장과 매칭
     loop_detection: bool = True       # sequential 일 때 같은 곳 다시 지나면 연결 (어휘 트리 필요)
+    vocab_tree: str | None = None     # 어휘 트리 파일 (없으면 COLMAP 이 인터넷에서 받음, 오프라인이면 루프 검출 없이 다시)
 
 
 @dataclass
@@ -54,6 +55,18 @@ class FillCfg:
 
 
 @dataclass
+class WallsCfg:
+    """벽 평탄화 (도면 좌표로 정합됐을 때만, = pose_prior_mapper). stages/walls.py, stages/snap.py"""
+    enabled: bool = True             # 정합 점으로 도면 면 위치 다시 맞추기 (walls/planes.json)
+    seed: bool = True                # 면 위에 초기 점 심기 -> data_seed/ 로 학습 (흰 벽 구멍·안개)
+    seed_spacing: float = 0.08       # 심는 점 간격 (m)
+    snap: bool = True                # 학습 후 벽 근처 스플랫을 면에 붙이고 납작하게 -> splat_walls.ply
+    band: float = 0.06               # 면에서 이 거리(m) 안의 스플랫만 붙임
+    remove_behind: bool = True       # 벽 뒤(문 구멍 아닌 곳) 부유물 지우기
+    search: float = 0.30             # 도면 면에서 이 거리(m) 안의 정합 점으로 실제 면을 찾음
+
+
+@dataclass
 class ProjectConfig:
     sections: list[Section]
     tools: Tools = field(default_factory=Tools)
@@ -62,6 +75,7 @@ class ProjectConfig:
     register: RegisterCfg = field(default_factory=RegisterCfg)
     train: TrainCfg = field(default_factory=TrainCfg)
     fill: FillCfg = field(default_factory=FillCfg)
+    walls: WallsCfg = field(default_factory=WallsCfg)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,8 +121,9 @@ def parse(data: dict) -> ProjectConfig:
         register=_build(RegisterCfg, data.get("register"), "register"),
         train=_build(TrainCfg, data.get("train"), "train"),
         fill=_build(FillCfg, data.get("fill"), "fill"),
+        walls=_build(WallsCfg, data.get("walls"), "walls"),
     )
-    extra = set(data) - {"sections", "tools", "gpu_profile", "extract", "register", "train", "fill"}
+    extra = set(data) - {"sections", "tools", "gpu_profile", "extract", "register", "train", "fill", "walls"}
     if extra:
         raise ConfigError(f"모르는 최상위 항목 {sorted(extra)}")
     for path, allowed in _ENUMS.items():

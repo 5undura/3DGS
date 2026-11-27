@@ -41,7 +41,9 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
     colmap/db.db  colmap/sparse/<n>/   register
     data/images  data/sparse/0         register (왜곡 보정 사진, 학습 입력)
     diagnose.json  data_clean/         diagnose
+    walls/planes.json  data_seed/      walls (도면 좌표일 때만: 면 다시 맞추기 + 초기 점 심기)
     train/<trainer>_<preset>/splat.ply  eval.json  stats.json   train
+    train/<trainer>_<preset>/splat_walls.ply  walls.json      snap (벽에 붙이기, 원본 splat.ply 는 그대로)
     fill/holes_backdrop.ply            fill
   merged/building.ply  merged/layout.json   merge
   report.html                               report
@@ -131,6 +133,26 @@ register는 이걸 COLMAP DB `pose_priors` 표에 넣고 `pose_prior_mapper`를 
 
 `excluded`에 든 사진은 `data_clean/`에서 빠진다 (원본 `data/`는 그대로).
 
+### walls/planes.json (walls가 씀), data_seed/
+
+도면 좌표(`register.json` mapper = `pose_prior_mapper`)이고 `project.yaml` `walls.enabled`일 때만.
+
+```json
+{"version": 1, "rooms": ["corridor1"], "source_model": "data_clean",
+ "planes": [{"id": "corridor1:w1", "kind": "wall", "room": "corridor1", "n": [-1, 0, 0], "d": 1.17,
+             "origin": [-1.17, -1, 0], "U": [0, 1, 0], "V": [0, 0, 1], "size": [30, 2.7], "holes": [[4.47, 5.47, 0, 2.1]]}],
+ "plan_planes": [...], "fit": [{"id": "corridor1:w1", "source": "fit", "shift_m": 0.04, "tilt_deg": 0.3, "n_points": 812, "coverage": 0.6}],
+ "points_flatness_before": {...}, "points_flatness_after": {...}, "seed": {"n_added": 182000}}
+```
+
+- 면: `n·x = d`, n 은 방 안쪽. 벽은 방 다각형의 변 하나, 바닥·천장은 방 하나 (`walls/planes.py`).
+- `planes`는 정합 점으로 다시 맞춘 면(점이 모자라면 도면 그대로, `source: "plan"`), `plan_planes`는 도면 그대로.
+- `data_seed/`: `data_clean/`과 같은 사진(링크) + `sparse/0`에 면 위 초기 점(색은 사진에서, 트랙 없음)을 더한 모델. train은 `data_seed` > `data_clean` > `data` 순으로 읽는다.
+
+### train/<run>/splat_walls.ply, walls.json (snap이 씀)
+
+벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안의 스플랫을 면 위로 옮겨 법선 방향으로 납작하게 한 PLY. 속성 순서는 원본 그대로. `walls.json`에 붙인 수·지운 수·벽 평탄도(불투명 스플랫의 면까지 거리 RMS) 전후. fill·merge는 `splat_walls.ply`가 있으면 그것을 쓴다.
+
 ### train/<trainer>_<preset>/eval.json, stats.json (train이 씀)
 
 ```json
@@ -167,7 +189,7 @@ class TrainerAdapter:
     def find_result(self, out_dir) -> Path | None  # 최종 PLY
 ```
 
-`ctx`는 `StageContext(project, section, cfg, log)`. 단계 순서: extract → prior → register → diagnose → train → fill → (모든 구간 후) merge → report. `prior`는 `plan.json`과 `path.json`이 둘 다 있을 때만 돈다.
+`ctx`는 `StageContext(project, section, cfg, log)`. 단계 순서: extract → prior → register → diagnose → walls → train → snap → fill → (모든 구간 후) merge → report. `walls`·`snap`은 도면 좌표 구간에서만 돈다. `prior`는 `plan.json`과 `path.json`이 둘 다 있을 때만 돈다.
 
 ## 6. 작업 규칙
 

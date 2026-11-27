@@ -41,9 +41,16 @@ CMD_GLOBAL = "global_mapper"
 OPT_SINGLE_CAMERA = "--ImageReader.single_camera"
 OPT_CAMERA_MODEL = "--ImageReader.camera_model"
 OPT_SEQ_OVERLAP = "--SequentialMatching.overlap"
-OPT_SEQ_LOOP = "--SequentialMatching.loop_detection"   # 어휘 트리 경로 기본값 = 자동 다운로드 (TODO(PC): 오프라인이면 실패)
-# priors.json 의 sigma 를 DB 에 넣으므로 공분산을 덮어쓰지 않음 (기본값도 0 이지만 명시)
-PRIOR_MAPPER_EXTRA = ["--overwrite_priors_covariance", "0"]   # TODO(PC에서 -h로 확인): bool 을 0/1 로 받는지
+OPT_SEQ_LOOP = "--SequentialMatching.loop_detection"
+# 어휘 트리: 4.2.1 controllers/pairing.cc 는 vocab_tree_path 가 비면 retrieval/resources.h 의 기본 URI
+# (github.com/colmap/colmap/releases/download/3.11.1/vocab_tree_faiss_flickr100K_words256K.bin) 를 받아
+# ~/.cache/colmap 에 저장해 씀 (util/file.cc). 오프라인이면 실패 -> register.vocab_tree 로 받아 둔 파일 지정,
+# 그래도 실패하면 loop_detection 0 으로 한 번 더 (아래 run).
+OPT_SEQ_VOCAB = "--SequentialMatching.vocab_tree_path"
+# priors.json 의 sigma 를 DB 에 넣으므로 공분산을 덮어쓰지 않음 (기본값도 false 이지만 명시).
+# exe/sfm.cc: bool overwrite_priors_covariance 를 AddDefaultOption 으로 등록 -> boost program_options 의 bool 값이라
+# 0/1/true/false 모두 받음 (다른 bool 옵션 --SiftExtraction.use_gpu 0 과 같은 방식)
+PRIOR_MAPPER_EXTRA = ["--overwrite_priors_covariance", "0"]
 
 MATCH_DONE = "matching.done"
 MAPPER_DONE = "mapper.done"
@@ -127,10 +134,19 @@ class Register(Stage):
                 move_aside(db)
                 return fail(f"{CMD_FEATURES} 실패 (코드 {r.code})")
             margs = ["--database_path", db]
+            loop = rc.matcher == "sequential" and rc.loop_detection
             if rc.matcher == "sequential":
                 # 옵션 이름: COLMAP 4.2.1 controllers/option_manager.cc
-                margs += [OPT_SEQ_OVERLAP, str(rc.seq_overlap), OPT_SEQ_LOOP, "1" if rc.loop_detection else "0"]
+                margs += [OPT_SEQ_OVERLAP, str(rc.seq_overlap), OPT_SEQ_LOOP, "1" if loop else "0"]
+                if loop and rc.vocab_tree:
+                    margs += [OPT_SEQ_VOCAB, rc.vocab_tree]
             r = colmap(f"{rc.matcher}_matcher", *margs)
+            if not r.ok and loop:
+                # 어휘 트리 다운로드 실패(오프라인) 등 -> 루프 검출 없이 다시. 매칭은 DB 에 이어 쓰므로 그대로 다시 돌림
+                ctx.log(f"경고: loop_detection 매칭 실패 (코드 {r.code}) -> loop_detection 0 으로 다시 "
+                        "(어휘 트리를 받아 두고 project.yaml register.vocab_tree 에 경로를 적으면 루프 검출 가능)")
+                margs = ["--database_path", db, OPT_SEQ_OVERLAP, str(rc.seq_overlap), OPT_SEQ_LOOP, "0"]
+                r = colmap(f"{rc.matcher}_matcher", *margs)
             if not r.ok:
                 move_aside(db)
                 return fail(f"{rc.matcher}_matcher 실패 (코드 {r.code})")

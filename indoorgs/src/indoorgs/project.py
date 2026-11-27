@@ -34,6 +34,12 @@ class SectionPaths:
     @property
     def data_clean(self) -> Path: return self.root / "data_clean"
     @property
+    def walls(self) -> Path: return self.root / "walls"
+    @property
+    def planes_json(self) -> Path: return self.walls / "planes.json"
+    @property
+    def data_seed(self) -> Path: return self.root / "data_seed"
+    @property
     def train(self) -> Path: return self.root / "train"
     def train_run(self, trainer: str, preset: str) -> Path: return self.train / f"{trainer}_{preset}"
 

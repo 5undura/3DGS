@@ -24,8 +24,9 @@ RADIUS_MUL = 3.0       # 반경 배수 (PROGRESS: L7_fill 에서 3 사용)
 
 
 def train_ply(ctx: StageContext) -> Path:
-    t = ctx.project.cfg.train
-    return ctx.paths.latest_train_run(t.trainer, t.preset) / "splat.ply"   # 최신 학습 (_2, _3 ...)
+    """최신 학습 (_2, _3 ...) 의 결과. 벽에 붙인 splat_walls.ply(stages/snap.py) 가 있으면 그것."""
+    from .snap import train_ply as snapped
+    return snapped(ctx)
 
 
 def model_dirs(ctx: StageContext) -> tuple[Path | None, Path]:

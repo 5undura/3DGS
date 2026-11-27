@@ -13,3 +13,4 @@ extract: {min_diff: 4, sharp_ratio: 0.8}
 register: {matcher: sequential, mapper: incremental, use_floorplan_prior: true}
 train: {trainer: brush, preset: default}
 fill: {holes_only: true}
+walls: {enabled: true, seed: true, snap: true, band: 0.06, remove_behind: true}
