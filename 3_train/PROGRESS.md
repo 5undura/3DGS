@@ -10,7 +10,7 @@
 - [x] 2단계 재정합 (sequential + loop, global / incremental) → global 못 씀, **incremental 이 원래보다 나음** (아래 표)
 - [x] 3단계 Brush 2560 → 1920 과 PSNR 같음 (해상도는 병목 아님)
 - [x] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
-- [ ] LichtFeld pose-opt / PPISP — clang-cl 설치 대기
+- [ ] LichtFeld pose-opt / PPISP — 빌드 성공(14:07), L0(pose-opt 없음) 끝, L1(pose-opt) 진행 중
 
 ## 도구 확인 (2026-11-27)
 | 도구 | 버전 | train_all / register_all 옵션 대조 |
@@ -93,3 +93,12 @@
 - `F:\Sample\tools\lfs` 의 실패한 빌드 로그(build_log, build_log2, vs2026/경로 오류 시도) 삭제. 내용은 위 시행착오에 요약돼 있음
 - LichtFeld 빌드 시행착오 추가: ① build_lfs.bat 의 한글 주석을 cmd 가 CP949 로 잘못 읽어 vcvars64 줄이 실행 안 됨 → bat 은 ASCII 만
   ② vcpkg 가 VS2026(18, MSVC 14.52) 컴파일러를 고름 → `F:\Sample\tools\lfs\triplets\x64-windows.cmake` 에 `VCPKG_VISUAL_STUDIO_PATH`(VS2022, 백슬래시 두 번) + `VCPKG_PLATFORM_TOOLSET v143`, cmake 에 `-DVCPKG_OVERLAY_TRIPLETS` → MSVC 14.44 로 빌드 진행 중
+
+## LichtFeld 실험 (11-27 오후)
+- 빌드 성공 14:07 (VS2022 고정, clang-cl). 마지막 걸림: uv 다운로드 후 `.part` → `.zip` 이름 바꾸기 실패(백신 검사 잠금 추정) → 체크섬 확인 후 직접 바꿈
+- 빌드 중간물 vcpkg\buildtrees(16GB)·packages(4.3GB) 삭제 (바이너리 캐시 vcpkg_cache 에 남음)
+- 새 스크립트 `3_train/lfs_eval.ps1` (학습+평가+통계), `tools/compare_eval.py` (같은 사진끼리 PSNR 비교, Brush/LichtFeld 둘 다)
+- v0.5.4.3 기본값 주의: `--exposure-correction`(사진별 노출·WB + 국소 격자), 보정 왜곡(calibration correction, 1px 어긋남 흡수) 이 **기본으로 켜져 있음**
+- L0 (pose-opt 없음): 25.62 / 0.863, 같은 133장에서 Brush 25.75 와 거의 같음. 23분 (Brush 36분보다 빠름)
+  - **정렬 후 PSNR 27.14**: 렌더를 사진에 맞춰 옮기면 +1.5 → 평가 사진 렌더가 중앙 2.0px(최대 53.8px) 어긋나 있음 = **자세 오차가 실제로 있음**
+  - 반투명 96.2% (Brush 86.9%) → VR 비침에는 더 나쁨. MCMC 특성으로 보임
