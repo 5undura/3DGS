@@ -7,6 +7,8 @@
   needle_ratio = 가장 긴 축 / 중간 축 > 10 비율 (ply_stats.py 의 needle10. CONTRACT 문구는 '가장 짧은 축'이지만
   같은 정의라고 했으므로 실제 도구를 따름)
 - 실패하면 run 폴더를 <이름>_failed_<시각> 으로 옆으로
+- 다시 돌리기(--rerun train): 최신 폴더가 끝났으면 덮어쓰지 않고 <trainer>_<preset>_2, _3 ... 새 폴더
+  (SectionPaths.latest_train_run / new_train_run). fill·merge·report 는 최신 폴더를 씀
 """
 from __future__ import annotations
 
@@ -93,11 +95,25 @@ class Train(Stage):
 
     def _run_dir(self, ctx: StageContext) -> Path:
         t = ctx.project.cfg.train
-        return ctx.paths.train_run(t.trainer, t.preset)
+        return ctx.paths.latest_train_run(t.trainer, t.preset)
+
+    @staticmethod
+    def _files(run: Path) -> list[Path]:
+        return [run / "splat.ply", run / "eval.json", run / "stats.json"]
 
     def outputs(self, ctx: StageContext) -> list[Path]:
+        return self._files(self._run_dir(ctx))
+
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        return []          # 이전 학습은 그 자리에 두고 새 번호 폴더에 학습
+
+    def _target(self, ctx: StageContext) -> Path:
+        """이번에 학습할 폴더. 최신이 끝났고 다시 돌리는 중이면 새 번호, 아니면 최신(끝나지 않은 것은 run 에서 옆으로)."""
         run = self._run_dir(ctx)
-        return [run / "splat.ply", run / "eval.json", run / "stats.json"]
+        if ctx.rerun and all(p.exists() for p in self._files(run)):
+            t = ctx.project.cfg.train
+            return ctx.paths.new_train_run(t.trainer, t.preset)
+        return run
 
     def run(self, ctx: StageContext) -> StageResult:
         cfg, p = ctx.project.cfg, ctx.paths
@@ -118,7 +134,7 @@ class Train(Stage):
         if not (data_dir / "sparse" / "0").exists():
             return StageResult(False, f"학습 입력 없음: {data_dir}/sparse/0 (register 먼저)")
 
-        run = self._run_dir(ctx)
+        run = self._target(ctx)
         if run.exists():
             ctx.log(f"끝나지 않은 {run.name} -> {move_aside(run).name}")
         run.mkdir(parents=True)
@@ -146,4 +162,4 @@ class Train(Stage):
         schemas.write_json(run / "eval.json", {"version": schemas.VERSION, **ev})
         msg = (f"{stats['count']:,}개, 반투명 {stats['translucent_ratio'] * 100:.1f}%, "
                f"PSNR {ev['psnr'] if ev['psnr'] is not None else '-'}")
-        return StageResult(True, msg, self.outputs(ctx))
+        return StageResult(True, f"{run.name}: {msg}", self._files(run))

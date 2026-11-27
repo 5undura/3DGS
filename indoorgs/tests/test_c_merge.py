@@ -61,7 +61,7 @@ def test_layout_v4_matches_existing_formula(tmp_path):
     assert lay["sections"]["west"]["source"] == "layout.json"
     np.testing.assert_allclose(lay["sections"]["hall"]["matrix_4x4"], v4["2"]["matrix_4x4"])
     assert lay["sections"]["hall"]["ply"].endswith("holes_backdrop.ply")
-    assert any("SH" in n for n in lay["notes"])             # SH 미회전 경고가 기록됨
+    assert not any("SH" in n for n in lay["notes"])         # SH 도 돌리므로 '회전 생략' 메모 없음
     kept = list(pr.merged.glob("layout_input_*.json"))       # 사용자 입력 보존
     assert len(kept) == 1 and json.loads(kept[0].read_text(encoding="utf-8"))["1"] == v4["1"]
 

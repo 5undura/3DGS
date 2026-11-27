@@ -15,7 +15,9 @@
   conform(data, dtype)             한 배열을 공통 속성으로 맞춤 (SH 차수 맞추기 포함)
   concat(plys)                     공통 속성으로 맞춰 이어 붙임
   similarity_parts(M)              4x4 -> (축척 s, 회전 R, 이동 t). 닮음 변환이 아니면 ValueError
-  transform(ply, M)                위치·회전·스케일(로그)·법선 변환. SH 고차 계수는 돌리지 않음(경고)
+  transform(ply, M)                위치·회전·스케일(로그)·법선·SH 고차 계수(차수 1~3) 변환
+  eval_sh(coef, dirs)              SH 색 계산 (3DGS utils/sh_utils.eval_sh 와 같은 기저·부호)
+  sh_rotation(R, l)                차수 l 의 (2l+1)x(2l+1) 계수 회전 행렬
   stats(ply)                       count, translucent_ratio, needle_ratio (tools/ply_stats.py 와 같은 정의)
   merge_files(out, [(path, M)])    큰 PLY 여러 개를 하나씩 읽어 변환·합쳐 바로 씀 (메모리 절약)
 """
@@ -46,7 +48,7 @@ class PlyError(ValueError):
 
 
 class ShNotRotatedWarning(UserWarning):
-    """transform 이 SH 고차 계수(f_rest)를 돌리지 않았음. 시점에 따른 색 변화가 회전만큼 어긋남."""
+    """(예전 호환용) transform 이 SH 고차 계수를 돌리지 않았을 때의 경고. 지금은 차수 1~3 을 돌리므로 안 나옴."""
 
 
 @dataclass
@@ -347,11 +349,79 @@ def similarity_parts(M, tol: float = 2e-3) -> tuple[float, np.ndarray, np.ndarra
     return s, R, M[:3, 3].copy()
 
 
+# ---------------- SH 회전 ----------------
+# 3DGS 원본 utils/sh_utils.py 의 상수·기저 (부호 포함). Brush·LichtFeld 도 같은 기저로 PLY 를 씀.
+SH_C1 = 0.4886025119029199
+SH_C2 = [1.0925484305920792, -1.0925484305920792, 0.31539156525252005, -1.0925484305920792, 0.5462742152960396]
+SH_C3 = [-0.5900435899266435, 2.890611442640554, -0.4570457994644658, 0.3731763325901154,
+         -0.4570457994644658, 1.445305721320277, -0.5900435899266435]
+
+
+def sh_basis(dirs: np.ndarray, l: int) -> np.ndarray:
+    """(N,3) 단위 방향 -> (N, 2l+1) 차수 l 기저값. eval_sh 의 각 항에서 계수를 뺀 것."""
+    x, y, z = np.asarray(dirs, np.float64).T
+    if l == 0:
+        return np.full((len(x), 1), SH_C0)
+    if l == 1:
+        return np.stack([-SH_C1 * y, SH_C1 * z, -SH_C1 * x], 1)
+    xx, yy, zz = x * x, y * y, z * z
+    if l == 2:
+        return np.stack([SH_C2[0] * x * y, SH_C2[1] * y * z, SH_C2[2] * (2 * zz - xx - yy),
+                         SH_C2[3] * x * z, SH_C2[4] * (xx - yy)], 1)
+    if l == 3:
+        return np.stack([SH_C3[0] * y * (3 * xx - yy), SH_C3[1] * x * y * z, SH_C3[2] * y * (4 * zz - xx - yy),
+                         SH_C3[3] * z * (2 * zz - 3 * xx - 3 * yy), SH_C3[4] * x * (4 * zz - xx - yy),
+                         SH_C3[5] * z * (xx - yy), SH_C3[6] * x * (xx - 3 * yy)], 1)
+    raise ValueError(f"SH 차수 {l} 는 지원 안 함 (0~3)")
+
+
+def eval_sh(coef: np.ndarray, dirs: np.ndarray) -> np.ndarray:
+    """coef (N, 3, (d+1)^2) [채널, 계수], dirs (N,3) 단위 방향 -> (N,3) 색 (0.5 더하기 전, sh_utils.eval_sh 와 같음)."""
+    nk = coef.shape[-1]
+    d = int(round(np.sqrt(nk))) - 1
+    B = np.concatenate([sh_basis(dirs, l) for l in range(d + 1)], 1)        # (N, nk)
+    return np.einsum("nck,nk->nc", coef, B)
+
+
+def _fib_dirs(n: int = 64) -> np.ndarray:
+    """구 위에 고르게 퍼진 n 개 방향 (최소제곱 표본)."""
+    i = np.arange(n) + 0.5
+    phi = np.arccos(1 - 2 * i / n)
+    th = np.pi * (1 + 5 ** 0.5) * i
+    return np.stack([np.cos(th) * np.sin(phi), np.sin(th) * np.sin(phi), np.cos(phi)], 1)
+
+
+def sh_rotation(R: np.ndarray, l: int) -> np.ndarray:
+    """차수 l 계수 회전 행렬 D ((2l+1)x(2l+1), 직교). 계수 행벡터 c 에 c' = c @ D.T 로 쓰면
+    eval(c', R d) == eval(c, d). 같은 차수 기저는 회전에 닫혀 있으므로 표본 방향 최소제곱으로 정확히 구해짐:
+    Y(R^T u) = Y(u) @ D  ->  c'·Y(u) = c·Y(R^T u) = (c @ D.T)·Y(u)."""
+    U = _fib_dirs()
+    D, *_ = np.linalg.lstsq(sh_basis(U, l), sh_basis(U @ np.asarray(R, np.float64), l), rcond=None)
+    return D
+
+
+def _rotate_sh(d: np.ndarray, R: np.ndarray) -> None:
+    """구조화 배열 d 의 f_rest (채널 우선: f_rest_{c*K+k}) 를 이름으로 읽어 R 만큼 돌림 (제자리)."""
+    K = _rest_count(d.dtype.names) // 3
+    deg = int(round(np.sqrt(K + 1))) - 1
+    start = 0                              # 차수 l 의 계수는 f_rest 안에서 k = l^2-1 .. (l+1)^2-2
+    for l in range(1, deg + 1):
+        m = 2 * l + 1
+        D = sh_rotation(R, l)
+        for c in range(3):
+            keys = [f"f_rest_{c * K + start + j}" for j in range(m)]
+            C = np.stack([d[k] for k in keys], 1).astype(np.float64)
+            C = C @ D.T
+            for j, k in enumerate(keys):
+                d[k] = C[:, j]
+        start += m
+
+
 def transform(ply: GaussianPly, M, warn_sh: bool = True) -> GaussianPly:
     """닮음 변환 M(4x4) 적용한 새 PLY.
-    위치 p' = sR p + t, 회전 q' = q_R * q, 스케일(로그) + log s, 법선 n' = R n.
-    SH 고차(f_rest)는 돌리지 않음 -> 차수 >= 1 이고 회전이 단위가 아니면 ShNotRotatedWarning.
-    (닮음 변환에서 f_dc·불투명도는 그대로)"""
+    위치 p' = sR p + t, 회전 q' = q_R * q, 스케일(로그) + log s, 법선 n' = R n,
+    SH 고차(f_rest, 차수 1~3) 는 sh_rotation 으로 돌림 (보는 방향 R d 에서 원래 d 의 색).
+    (닮음 변환에서 f_dc·불투명도는 그대로. warn_sh 는 예전 호환용 인자로 지금은 쓰지 않음)"""
     s, R, t = similarity_parts(M)
     d = ply.data.copy()
     P = ply.xyz @ (s * R).T + t
@@ -368,10 +438,8 @@ def transform(ply: GaussianPly, M, warn_sh: bool = True) -> GaussianPly:
         N = np.stack([d["nx"], d["ny"], d["nz"]], 1).astype(np.float64) @ R.T
         for i, k in enumerate(("nx", "ny", "nz")):
             d[k] = N[:, i]
-    if warn_sh and ply.sh_degree > 0 and not np.allclose(R, np.eye(3), atol=1e-9):
-        ang = np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1)))
-        warnings.warn(f"SH 고차 계수(차수 {ply.sh_degree})는 돌리지 않음 (회전 {ang:.1f}도). "
-                      "보는 방향에 따른 색 변화가 그만큼 어긋남", ShNotRotatedWarning, stacklevel=2)
+    if ply.sh_degree > 0 and not np.allclose(R, np.eye(3), atol=1e-12):
+        _rotate_sh(d, R)
     return GaussianPly(d, list(ply.comments))
 
 

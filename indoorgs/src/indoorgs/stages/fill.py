@@ -25,7 +25,7 @@ RADIUS_MUL = 3.0       # 반경 배수 (PROGRESS: L7_fill 에서 3 사용)
 
 def train_ply(ctx: StageContext) -> Path:
     t = ctx.project.cfg.train
-    return ctx.paths.train_run(t.trainer, t.preset) / "splat.ply"
+    return ctx.paths.latest_train_run(t.trainer, t.preset) / "splat.ply"   # 최신 학습 (_2, _3 ...)
 
 
 def model_dirs(ctx: StageContext) -> tuple[Path | None, Path]:
@@ -73,6 +73,9 @@ class Fill(Stage):
 
     def outputs(self, ctx: StageContext) -> list[Path]:
         return [ctx.paths.fill_ply]
+
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        return [ctx.paths.fill]
 
     def run(self, ctx: StageContext) -> StageResult:
         src = train_ply(ctx)

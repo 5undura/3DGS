@@ -1,6 +1,6 @@
 """6. 합치기 (담당 C, 프로젝트 범위). 구간별 최종 PLY -> merged/building.ply + layout.json
 
-구간 PLY: fill/holes_backdrop.ply 가 있으면 그것, 없으면 train/<학습기>_<프리셋>/splat.ply.
+구간 PLY: fill/holes_backdrop.ply 가 있으면 그것, 없으면 최신 train/<학습기>_<프리셋>[_N]/splat.ply.
 구간 변환(모델 좌표 -> 건물 좌표, 4x4):
 1. 공간 정합 구간 (plan.json + 구간 colmap/priors.json): 이미 도면 좌표 -> 단위 행렬.
    plan.json 의 문 근처에서 겹치는 구간끼리 작은 강체 정렬(점-점 ICP, 회전 3도·이동 0.3m 이하,
@@ -35,7 +35,7 @@ def section_ply(project, sec, paths) -> Path:
     if paths.fill_ply.exists():
         return paths.fill_ply
     t = project.cfg.train
-    return paths.train_run(t.trainer, t.preset) / "splat.ply"
+    return paths.latest_train_run(t.trainer, t.preset) / "splat.ply"      # 최신 학습 (_2, _3 ...)
 
 
 def read_layout(path: Path, names: list[str]) -> tuple[dict[str, np.ndarray], list[str]]:
@@ -116,6 +116,10 @@ class Merge(Stage):
 
     def outputs(self, ctx: StageContext) -> list[Path]:
         return [ctx.project.building_ply, ctx.project.layout_json]
+
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        # layout.json 은 다음 merge 의 입력이기도 함 -> 그대로 두고 run 이 layout_input_<시각>.json 으로 보존
+        return [ctx.project.building_ply]
 
     def run(self, ctx: StageContext) -> StageResult:
         pr = ctx.project
