@@ -11,6 +11,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["fastapi>=0.110", "uvicorn>=0.29"]
+fill = ["scipy>=1.10"]   # fill·merge: cKDTree(구멍 고르기, ICP), ndimage(평면도 격자)
 dev = ["pytest>=8"]
 
 [project.scripts]
