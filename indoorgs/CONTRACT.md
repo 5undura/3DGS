@@ -87,6 +87,7 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
 
 - 방은 `box`(중심·크기·회전) 또는 `floor`(바닥 다각형, 반시계) 중 하나. 읽을 때 `box`로 `floor`를 계산하고, `Room.box`에 박스 정보도 남겨 다시 쓸 때 `box`로 저장한다.
 - `source.kind`: `boxes` | `dxf` | `svg` | `image`. 이미지면 `px_per_m`, 원근 보정 네 점(`corners`)·`size_m`을 함께 적는다.
+- `source.image_align` (선택): 도면 배경(`plan.png`) 정렬 `{"px_per_m": 50, "origin_px": [x, y], "flip_y": true}`. `origin_px`는 도면 (0, 0)이 놓이는 이미지 픽셀, `flip_y`면 이미지 y 아래 = 도면 y 위. GUI가 읽고 씀. 불러온 원본 도면은 `floorplan/source/`에 보관.
 - 편집·불러오기 API는 `indoorgs.space` (`SpaceModel`, `import_dxf/svg/image`).
 
 ### sections/<name>/path.json (B가 씀)
