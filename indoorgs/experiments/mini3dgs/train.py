@@ -333,7 +333,8 @@ def _novel_list(novel_views, scene: Scene, res: int) -> list[View]:
 DEFAULTS = dict(sh_degree=2, cap=100_000, bg=(0.0, 0.0, 0.0), random_bg=False, grad_thresh=0.0002,
                 densify_from=None, densify_until=None, densify_every=100, opacity_reset=None, sh_every=None,
                 lambda_dssim=0.2, tile=16, seed=0, log_every=100, eval_every=0, test_every=8, max_images=None,
-                save_renders=6, threads=None)
+                save_renders=6, threads=None, finetune=False, checkpoints=(), flat_planes=None, flat_lambda=0.0,
+                flat_band=0.03)
 
 
 def pick_threads(threads=None) -> int:
@@ -366,11 +367,23 @@ def schedule(iters: int, o: dict) -> dict:
 
 
 def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init_points=None,
-          novel_views=None, scene: Scene | None = None, **opts) -> dict:
+          novel_views=None, scene: Scene | None = None, init_ply=None, **opts) -> dict:
     """학습 + 평가. 반환 metrics dict (out_dir/metrics.json 에도 씀). PLY 는 out_dir/point_cloud.ply (Brush 순서).
     opts: DEFAULTS 참고. bg=(r,g,b) 0..1 (학습·평가 배경), random_bg=True 면 학습 때만 매 반복 무작위 배경.
-    scene 을 주면 model_dir/image_dir 대신 그것을 씀 (이미 읽은 장면 재사용)."""
+    scene 을 주면 model_dir/image_dir 대신 그것을 씀 (이미 읽은 장면 재사용).
+
+    이어 학습 (fine-tune, 11-28 wall_ab RESULTS2): init_ply = 학습된(후처리한) 가우시안 PLY 경로. 그 가우시안을 그대로
+    시작점으로 같은 손실로 iters 번 더 학습. finetune=True (init_ply 를 주면 기본) 이면 원본 30k 일정의 끝 상태처럼:
+    SH 는 처음부터 PLY 차수, 밀도 조절·불투명도 리셋 없음, means 학습률은 끝 값(초기의 1%) 고정, 나머지 학습률 그대로.
+    checkpoints=(300, 600) 이면 그 반복에서 point_cloud_<it>.ply 도 씀.
+    flat_planes=[(n(3,), d)], flat_lambda > 0: 중심이 면 ±flat_band 안인 가우시안의 가장 짧은 축 길이(m) 평균에
+    flat_lambda 를 곱해 손실에 더함 (납작하게 하는 정규화, 실험용)."""
+    if init_ply is not None and "finetune" not in opts:
+        opts = {**opts, "finetune": True}
     o = schedule(iters, {**DEFAULTS, **opts})
+    if o["finetune"]:
+        o["densify_until"] = 0
+        o["opacity_reset"] = 0
     unknown = set(opts) - set(DEFAULTS)
     if unknown:
         raise TypeError(f"알 수 없는 옵션: {sorted(unknown)}")
@@ -382,7 +395,17 @@ def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init
     t0 = time.time()
     if scene is None:
         scene = load_scene(model_dir, image_dir, res, o["test_every"], o["max_images"])
-    if init_points is not None:
+    if init_ply is not None:
+        p0, ply_deg = gs.ply_to_params(init_ply)
+        xyz = p0["means"].numpy()
+        if ply_deg < o["sh_degree"]:          # PLY 차수가 낮으면 고차 SH 0 으로 채움
+            K = gs.n_rest(o["sh_degree"])
+            r = torch.zeros((len(xyz), K, 3))
+            r[:, :p0["sh_rest"].shape[1]] = p0["sh_rest"]
+            p0["sh_rest"] = r
+        elif ply_deg > o["sh_degree"]:
+            p0["sh_rest"] = p0["sh_rest"][:, :gs.n_rest(o["sh_degree"])]
+    elif init_points is not None:
         xyz, rgb = load_init_points(init_points)
     else:
         xyz, rgb = scene.xyz, scene.rgb
@@ -392,9 +415,15 @@ def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init
     W, H = scene.train[0].camera.width, scene.train[0].camera.height
     log(f"장면: 학습 {len(scene.train)} / 테스트 {len(scene.test)} / 새 시점 {len(novel)} 장, {W}x{H}, "
         f"초기 점 {len(xyz)}, extent {scene.extent:.2f}, 스레드 {torch.get_num_threads()}, 읽기 {time.time() - t0:.1f}s")
-    G = Gaussians(gs.init_params(xyz, rgb, o["sh_degree"]), scene.extent)
+    G = Gaussians(p0 if init_ply is not None else gs.init_params(xyz, rgb, o["sh_degree"]), scene.extent)
+    if o["finetune"]:
+        G.lr["means"] = G.lr["means"] * 0.01
     bg = torch.tensor(o["bg"], dtype=torch.float32)
-    deg = 0
+    deg = o["sh_degree"] if o["finetune"] else 0
+    fl_n = fl_d = None
+    if o["flat_planes"] and o["flat_lambda"] > 0:
+        fl_n = torch.tensor(np.array([q[0] for q in o["flat_planes"]]), dtype=torch.float32)
+        fl_d = torch.tensor(np.array([q[1] for q in o["flat_planes"]]), dtype=torch.float32)
     hist = []
     order = []
     t_train = time.time()
@@ -405,7 +434,8 @@ def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init
         tfrac = (it - 1) / max(1, iters - 1)
         for g in G.opt.param_groups:
             if g["name"] == "means":
-                g["lr"] = math.exp(math.log(G.lr["means"]) * (1 - tfrac) + math.log(G.lr["means"] * 0.01) * tfrac)
+                g["lr"] = G.lr["means"] if o["finetune"] else \
+                    math.exp(math.log(G.lr["means"]) * (1 - tfrac) + math.log(G.lr["means"] * 0.01) * tfrac)
         if it % o["sh_every"] == 0 and deg < o["sh_degree"]:
             deg += 1
         if not order:
@@ -417,6 +447,12 @@ def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init
         img = out["image"]
         l1 = (img - v.image).abs().mean()
         loss = (1 - o["lambda_dssim"]) * l1 + o["lambda_dssim"] * (1 - gs.ssim(img, v.image))
+        if fl_n is not None:
+            with torch.no_grad():
+                sdist = (G.p["means"] @ fl_n.T - fl_d).abs().min(1).values
+                near = sdist < o["flat_band"]
+            if near.any():
+                loss = loss + o["flat_lambda"] * torch.exp(G.p["log_scales"][near]).min(1).values.mean()
         loss.backward()
         pairs_win += out["n_pairs"]
         with torch.no_grad():
@@ -447,6 +483,9 @@ def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init
             log(f"it {it:5d}  loss {loss.item():.4f}  l1 {l1.item():.4f}  n {G.n:6d}  deg {deg}  "
                 f"{dt:.3f}s/it  pairs {pairs_win / o['log_every']:.0f}")
             t_win, pairs_win = time.time(), 0
+        if it in tuple(o["checkpoints"]) and it != iters:
+            from indoorgs import plyio
+            plyio.write(out_dir / f"point_cloud_{it}.ply", gs.params_to_ply(G.p, o["sh_degree"], ["mini3dgs", f"iters {it}"]))
         if o["eval_every"] and it % o["eval_every"] == 0 and it != iters:
             e = evaluate(G.p, deg, scene.test, bg)
             log(f"  [test] it {it}: PSNR {e['mean']['psnr']:.2f}  SSIM {e['mean']['ssim']:.3f}")
@@ -463,6 +502,7 @@ def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init
     ev_novel = evaluate(G.p, deg, novel, bg, rd, "novel", o["save_renders"]) if novel else None
     metrics = {
         "version": 1, "iters": iters, "res": [W, H], "n_init": int(len(xyz)), "count": G.n,
+        "init_ply": str(init_ply) if init_ply is not None else None,
         "ply": str(out_dir / "point_cloud.ply"), "ply_stats": plyio.stats(ply),
         "test": ev_test, "train_subset": ev_train["mean"], "novel": ev_novel,
         "time": {"train_s": round(train_s, 1), "s_per_iter": round(train_s / iters, 4),
@@ -486,6 +526,8 @@ def main(argv=None):
     ap.add_argument("--iters", type=int, default=3000)
     ap.add_argument("--res", type=int, default=200, help="학습 가로 해상도 (px)")
     ap.add_argument("--init", default=None, help="초기 점: COLMAP 모델 폴더 또는 점 PLY (없으면 --model 의 점)")
+    ap.add_argument("--init-ply", default=None, help="이어 학습: 학습된 가우시안 PLY 에서 시작 (fine-tune, 밀도 조절 없음)")
+    ap.add_argument("--checkpoints", default="", help="쉼표로 반복 수, 그때 point_cloud_<it>.ply 저장")
     ap.add_argument("--sh", type=int, default=2)
     ap.add_argument("--cap", type=int, default=100_000)
     ap.add_argument("--bg", default="0,0,0", help="배경 r,g,b (0..1)")
@@ -499,7 +541,8 @@ def main(argv=None):
     train(a.model, a.images, a.out, a.iters, a.res, init_points=a.init, sh_degree=a.sh, cap=a.cap,
           bg=tuple(float(x) for x in a.bg.split(",")), random_bg=a.random_bg, grad_thresh=a.grad_thresh,
           opacity_reset=a.opacity_reset, eval_every=a.eval_every, max_images=a.max_images,
-          threads=a.threads or None)
+          threads=a.threads or None, init_ply=a.init_ply,
+          checkpoints=tuple(int(x) for x in a.checkpoints.split(",") if x))
 
 
 if __name__ == "__main__":

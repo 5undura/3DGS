@@ -202,3 +202,36 @@ def test_tilted_real_wall_is_not_a_hole():
     assert fi["covered_off_plane_m2"] > 1.0
     _, old = repair.repair_faces(ply, [plan_pl], cameras=cams, max_hole_m2=None, hole_search=None)
     assert old["n_added"] > 0                                  # 예전 동작: 두 번째 벽
+
+
+def test_ray_coverage_skips_wall_drawn_behind_plane():
+    """wall_ab 버그 5: 학습된 3DGS 가 빈 원(HOLE) 자리를 면 40 cm 뒤 가우시안으로 그리고 있으면 (±30 cm 밖 = hole_search 로도
+    못 봄) 학습 카메라에서는 불투명 -> 카메라 광선 덮임으로 구멍 아님. 반투명 사각형(THIN)은 그대로 메움.
+    ray_check=False 면 예전처럼 빈 원도 메움."""
+    names = plyio.brush_names(2)
+    ply, planes, wall = build(names, seed=6)
+    rng = np.random.default_rng(6)
+    uu, vv = np.meshgrid(np.arange(2.6, 3.4, 0.04), np.arange(0.8, 1.6, 0.04))
+    M = uu.size
+    back = plyio.make(M, names)
+    for k in names:
+        back.data[k] = 0.0
+    P = wall.point(uu.ravel(), vv.ravel()) - 0.40 * wall.n
+    for i, c in enumerate("xyz"):
+        back.data[c] = P[:, i]
+    back.data["rot_0"] = 1.0
+    for i in range(3):
+        back.data[f"scale_{i}"] = np.log(0.04)
+    back.data["opacity"] = 4.0
+    both = plyio.GaussianPly(np.concatenate([ply.data, back.data]), [])
+    cam = np.array([[2.8, 2.0, 1.3]])
+    out, info = repair.repair_faces(both, [wall], cameras=cam, rng=0)
+    fi = info["faces"]["A:w0"]
+    assert fi["covered_by_rays_m2"] > 0.1
+    uv = wall.uv(out.xyz[both.n:])
+    in_hole = (uv[:, 0] - HOLE[0]) ** 2 + (uv[:, 1] - HOLE[1]) ** 2 < HOLE[2] ** 2
+    in_thin = (uv[:, 0] > THIN[0]) & (uv[:, 0] < THIN[1]) & (uv[:, 1] > THIN[2]) & (uv[:, 1] < THIN[3])
+    assert in_hole.sum() <= 2 and in_thin.sum() > 20
+    old, oinfo = repair.repair_faces(both, [wall], cameras=cam, rng=0, ray_check=False)
+    uv = wall.uv(old.xyz[both.n:])
+    assert ((uv[:, 0] - HOLE[0]) ** 2 + (uv[:, 1] - HOLE[1]) ** 2 < HOLE[2] ** 2).sum() > 20

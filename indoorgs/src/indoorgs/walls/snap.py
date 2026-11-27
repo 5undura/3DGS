@@ -15,7 +15,8 @@
 - 배정: 가우시안 **중심**이 면에서 |부호 거리| < band 이고 면 범위 안(contains_uv, uv_margin 만큼 가장자리 허용,
   문 구멍 제외)이면 그 면. 여러 면이면 |부호 거리|가 가장 작은 면 (모서리는 가까운 쪽 하나).
   두 방이 공유하는 벽(등을 맞댄 두 면)은 어느 쪽에 있는지로 나눔 (planes.better_face).
-- 색 검사 (11-28, 지운 의견): 기본 band 3 cm, 그리고 색이 그 자리 벽 색(면을 1 m 칸으로 나눈 칸별 중앙값)과
+- 색 검사 (11-28, 지운 의견): 기본 band 3 cm, 그리고 색이 그 자리 벽 색(면을 1 m 칸으로 나눈 칸별 넓이 가중 중앙값,
+  면 텍스처가 있으면 그 칸 사진 픽셀 중앙값)과
   채널 최대 0.12 넘게 다르면 안 붙임 -> 액자·게시판처럼 벽에 붙은 물체는 입체감 그대로.
 - 벽에 걸친(straddle) 가우시안: 중심이 band 안이면 법선 방향 두께와 상관없이 납작하게 만든다. 벽 앞의 뿌연 층
   (법선 방향으로 길쭉한 가우시안)이 바로 없애려는 "라이다 메쉬 같은" 울퉁불퉁함이라서. 법선 방향 축이 길어도
@@ -132,14 +133,77 @@ def _dc_rgb(d: np.ndarray, g: np.ndarray) -> np.ndarray:
     return 0.5 + plyio.SH_C0 * np.stack([d[f"f_dc_{i}"][g] for i in range(3)], 1).astype(np.float64)
 
 
+def _footprint(d: np.ndarray, g: np.ndarray, pl: Plane) -> np.ndarray:
+    """g 번 가우시안들을 면에 정사영한 1σ 타원 넓이 π·sqrt(det Σ2) (m²). 회전이 깨진 것은 0."""
+    q = _quats(d, g)
+    qn = np.linalg.norm(q, axis=1)
+    good = np.isfinite(qn) & (qn > 1e-12)
+    q[~good] = (1.0, 0.0, 0.0, 0.0)
+    R = plyio.quat_to_mat(q)
+    S2 = np.exp(2.0 * _scales(d, g))
+    MU = np.einsum("j,njk->nk", pl.U, R)
+    MV = np.einsum("j,njk->nk", pl.V, R)
+    a = np.einsum("nk,nk->n", MU * MU, S2)
+    b = np.einsum("nk,nk->n", MU * MV, S2)
+    c = np.einsum("nk,nk->n", MV * MV, S2)
+    area = np.pi * np.sqrt(np.maximum(a * c - b * b, 0.0))
+    area[~good | ~np.isfinite(area)] = 0.0
+    return area
+
+
+def _wmedian(x: np.ndarray, w: np.ndarray) -> np.ndarray:
+    """채널별 가중 중앙값. x (n, 3), w (n,) >= 0. 가중 합이 0 이면 그냥 중앙값."""
+    if w.sum() <= 0:
+        return np.median(x, 0)
+    out = np.empty(x.shape[1])
+    for ch in range(x.shape[1]):
+        o = np.argsort(x[:, ch], kind="stable")
+        cw = np.cumsum(w[o])
+        out[ch] = x[o[np.searchsorted(cw, 0.5 * cw[-1])], ch]
+    return out
+
+
+def _texture_grid(tex, pl: Plane, cell: float, nu: int, nv: int, min_frac: float = 0.25):
+    """면 텍스처(walls.facetex.FaceTexture) -> 칸별 사진 픽셀 색 중앙값 (nu, nv, 3) 0..1 과 쓸 수 있는 칸 (nu, nv).
+    텍스처 픽셀은 면 위 같은 넓이라 칸 중앙값 = 넓이 기준 중앙값. 색 있는 픽셀(source > 0)이 칸 안 픽셀의 min_frac 미만이면 안 씀."""
+    H, W = tex.image.shape[:2]
+    jj, ii = np.meshgrid(np.arange(W), np.arange(H))
+    u = (jj + 0.5) * tex.res
+    v = (ii + 0.5) * tex.res
+    iu = np.clip((u / cell).astype(int), 0, nu - 1)
+    iv = np.clip((v / cell).astype(int), 0, nv - 1)
+    grid = np.zeros((nu, nv, 3))
+    ok = np.zeros((nu, nv), bool)
+    have = (tex.source > 0) & tex.inside
+    img = tex.image.astype(np.float64) / 255.0
+    for a in range(nu):
+        for b in range(nv):
+            cellm = (iu == a) & (iv == b) & tex.inside
+            m = cellm & have
+            if m.sum() >= max(4, min_frac * max(1, cellm.sum())):
+                grid[a, b] = np.median(img[m], 0)
+                ok[a, b] = True
+    return grid, ok
+
+
 def wall_colors(ply: GaussianPly, planes: list[Plane], band: float, uv_margin: float = 0.05, cell: float = 1.0,
-                min_opacity: float = 0.5, chunk: int = CHUNK) -> dict:
-    """면별 "그 자리 벽 색": 면을 cell(m) 칸으로 나눠 칸마다 불투명 가우시안 DC 색의 중앙값 (조명이 점점 변해도 따라감).
-    액자·게시판처럼 색이 다른 물체가 칸의 절반을 넘지 않으면 중앙값은 벽 색. 가우시안이 적은 칸(<8)은 면 전체 중앙값.
-    반환 {면 번호: (칸 색 (nu, nv, 3), 면 전체 색 (3,))}"""
+                min_opacity: float = 0.5, chunk: int = CHUNK, texture: dict | None = None,
+                weighting: str = "area") -> dict:
+    """면별 "그 자리 벽 색": 면을 cell(m) 칸으로 나눠 칸마다 기준 색 (조명이 점점 변해도 따라감).
+    - weighting="area" (기본, 11-28 wall_ab 버그 1 수정): 불투명 가우시안 DC 색의 **넓이 가중** 중앙값.
+      가중치 = 면에 정사영한 1σ 타원 넓이(칸 넓이로 자름) × 불투명도. 무늬 있는 물체(포스터·액자)는 흰 벽보다 m² 당
+      가우시안이 훨씬 많아서 개수 중앙값이면 칸 넓이의 48% 인 포스터가 가우시안의 85% 를 차지해 '벽 색' 이 포스터 색이
+      되고 색 검사가 거꾸로 동작했음 (포스터 붙임, 흰 벽 건너뜀). 넓이로 세면 칸의 절반 넘게 덮는 쪽이 기준 색.
+    - weighting="count": 예전 방식 (가우시안 개수 중앙값, 비교용).
+    - texture ({면 id: walls.facetex.FaceTexture}, 선택): 있으면 그 면은 사진 투영 텍스처의 칸별 픽셀 중앙값
+      (넓이 기준과 같은 뜻, 사진 색 그대로) 을 우선 쓰고, 색 있는 픽셀이 모자란 칸만 가우시안 기준.
+    가우시안이 적은 칸(<8)은 면 전체 값. 반환 {면 번호: (칸 색 (nu, nv, 3), 면 전체 색 (3,))}"""
+    if weighting not in ("area", "count"):
+        raise ValueError("weighting 은 area | count")
     d = ply.data
     N = len(d)
     acc: dict[int, list] = {}
+    cell_area = cell * cell
     for s in range(0, N, chunk):
         e = min(N, s + chunk)
         P = np.stack([d["x"][s:e], d["y"][s:e], d["z"][s:e]], 1).astype(np.float64)
@@ -150,30 +214,51 @@ def wall_colors(ply: GaussianPly, planes: list[Plane], band: float, uv_margin: f
         g = s + sel
         op = 1.0 / (1.0 + np.exp(-d["opacity"][g].astype(np.float64)))
         m = op >= min_opacity
-        sel, g = sel[m], g[m]
+        sel, g, op = sel[m], g[m], op[m]
         rgb = _dc_rgb(d, g)
         for j in np.unique(idx[sel]):
             mm = idx[sel] == j
             uv = planes[j].uv(P[sel[mm]])
-            acc.setdefault(int(j), []).append((uv, rgb[mm]))
+            if weighting == "area":
+                w = np.minimum(_footprint(d, g[mm], planes[j]), cell_area) * op[mm]
+            else:
+                w = np.ones(int(mm.sum()))
+            acc.setdefault(int(j), []).append((uv, rgb[mm], w))
     out = {}
-    for j, parts in acc.items():
-        uv = np.concatenate([a for a, _ in parts])
-        rgb = np.concatenate([b for _, b in parts])
-        pl = planes[j]
+    for j, pl in enumerate(planes):
+        tex = texture.get(pl.id) if texture else None
+        if j not in acc and tex is None:
+            continue
         nu = max(1, int(np.ceil(pl.size[0] / cell)))
         nv = max(1, int(np.ceil(pl.size[1] / cell)))
-        iu = np.clip((uv[:, 0] / cell).astype(int), 0, nu - 1)
-        iv = np.clip((uv[:, 1] / cell).astype(int), 0, nv - 1)
-        glob = np.median(rgb, 0)
+        if j in acc:
+            parts = acc[j]
+            uv = np.concatenate([a for a, _, _ in parts])
+            rgb = np.concatenate([b for _, b, _ in parts])
+            w = np.concatenate([c for _, _, c in parts])
+            glob = _wmedian(rgb, w)
+        else:
+            uv, rgb, w = np.zeros((0, 2)), np.zeros((0, 3)), np.zeros(0)
+            glob = None
+        tgrid, tok = _texture_grid(tex, pl, cell, nu, nv) if tex is not None else (None, np.zeros((nu, nv), bool))
+        if glob is None:
+            if not tok.any():
+                continue
+            glob = np.median(tgrid[tok], 0)
         grid = np.tile(glob, (nu, nv, 1))
-        key = iu * nv + iv
-        order = np.argsort(key, kind="stable")
-        ks, starts = np.unique(key[order], return_index=True)
-        ends = np.append(starts[1:], len(order))
-        for k_, a, b in zip(ks, starts, ends):
-            if b - a >= 8:
-                grid[k_ // nv, k_ % nv] = np.median(rgb[order[a:b]], 0)
+        if len(uv):
+            iu = np.clip((uv[:, 0] / cell).astype(int), 0, nu - 1)
+            iv = np.clip((uv[:, 1] / cell).astype(int), 0, nv - 1)
+            key = iu * nv + iv
+            order = np.argsort(key, kind="stable")
+            ks, starts = np.unique(key[order], return_index=True)
+            ends = np.append(starts[1:], len(order))
+            for k_, a, b in zip(ks, starts, ends):
+                if b - a >= 8:
+                    o = order[a:b]
+                    grid[k_ // nv, k_ % nv] = _wmedian(rgb[o], w[o])
+        if tex is not None:
+            grid[tok] = tgrid[tok]
         out[j] = (grid, glob)
     return out
 
@@ -181,14 +266,17 @@ def wall_colors(ply: GaussianPly, planes: list[Plane], band: float, uv_margin: f
 def snap_to_planes(ply: GaussianPly, planes: list[Plane], *, band: float = 0.03, thickness: float = 0.004,
                    max_inplane: float = 0.6, min_opacity: float = 0.0, uv_margin: float = 0.05,
                    flatten: bool = True, move: bool = True, color_tol: float | None = 0.12, color_cell: float = 1.0,
+                   color_texture: dict | None = None, color_weighting: str = "area",
                    chunk: int = CHUNK) -> tuple[GaussianPly, dict]:
     """면 근처 가우시안을 면 위로 옮기고(move) 법선 방향으로 납작하게(flatten). 규칙은 모듈 주석.
     max_inplane: 면 안쪽 긴 축 표준편차(m) 상한, 넘으면 안 건드림. min_opacity: 이보다 투명하면 안 건드림 (0..1).
     color_tol (지운 의견, 11-28): 벽 앞 ±band(기본 3 cm) 안이라도 색이 그 자리 벽 색(wall_colors)과 채널 최대 차이
-    color_tol(0..1) 넘게 다르면 안 건드림 -> 액자·게시판·스위치 같은 벽에 붙은 물체의 입체감을 지킴. None 이면 색 검사 없음."""
+    color_tol(0..1) 넘게 다르면 안 건드림 -> 액자·게시판·스위치 같은 벽에 붙은 물체의 입체감을 지킴. None 이면 색 검사 없음.
+    color_texture / color_weighting: wall_colors 의 texture / weighting (기본 넓이 가중)."""
     plyio.check_required(ply.names)
     d = ply.data.copy()
-    wcol = wall_colors(ply, planes, band, uv_margin, color_cell, chunk=chunk) if color_tol is not None else {}
+    wcol = (wall_colors(ply, planes, band, uv_margin, color_cell, chunk=chunk, texture=color_texture,
+                        weighting=color_weighting) if color_tol is not None else {})
     N = len(d)
     logt = np.log(thickness)
     normals = np.array([p.n for p in planes], np.float64).reshape(-1, 3)
@@ -199,7 +287,8 @@ def snap_to_planes(ply: GaussianPly, planes: list[Plane], *, band: float = 0.03,
             "mean_abs_shift": 0.0, "max_abs_shift": 0.0,
             "params": {"band": band, "thickness": thickness, "max_inplane": max_inplane,
                        "min_opacity": min_opacity, "uv_margin": uv_margin, "flatten": flatten, "move": move,
-                       "color_tol": color_tol, "color_cell": color_cell}}
+                       "color_tol": color_tol, "color_cell": color_cell, "color_weighting": color_weighting,
+                       "color_texture": sorted(color_texture) if color_texture else None}}
     shift_sum = 0.0
     for s in range(0, N, chunk):
         e = min(N, s + chunk)
@@ -531,7 +620,7 @@ def splat_flatness(ply: GaussianPly, planes: list[Plane], band: float = 0.05, mi
 
 # ---------------- 파일 단위 ----------------
 _SNAP_KEYS = {"band", "thickness", "max_inplane", "min_opacity", "uv_margin", "flatten", "move", "color_tol",
-              "color_cell"}
+              "color_cell", "color_texture", "color_weighting"}
 
 
 def snap_file(in_ply, out_ply, planes: list[Plane], plan, *, remove_behind: bool = True, margin: float = 0.15,

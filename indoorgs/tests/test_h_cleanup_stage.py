@@ -171,7 +171,10 @@ def test_cleanup_moves_stale_outputs_aside(tmp_path):
 def test_cleanup_config():
     base_d = {"sections": [{"name": "a", "video": "v.mp4"}]}
     c = config.parse(base_d)
-    assert c.cleanup.enabled and c.cleanup.steps == ["floaters", "huge", "needles", "sh"]
+    assert c.cleanup.enabled and c.cleanup.steps == ["floaters"]          # 11-28 RESULTS2 기본값
+    w = c.walls
+    assert (w.seed, w.snap, w.repair, w.remove_behind, w.flatten, w.trust_plan_dims) == (True, False, False, False, False,
+                                                                                         False)
     c = config.parse({**base_d, "cleanup": {"steps": ["floaters", "sh"]}})
     assert c.cleanup.steps == ["floaters", "sh"]
     for bad in ({"steps": ["nope"]}, {"steps": "sh"}, {"steps": ["sh", "sh"]}, {"max_pieces": 4}):

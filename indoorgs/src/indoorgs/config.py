@@ -60,12 +60,14 @@ class WallsCfg:
     enabled: bool = True             # 정합 점으로 도면 면 위치 다시 맞추기 (walls/planes.json)
     seed: bool = True                # 면 위에 초기 점 심기 -> data_seed/ 로 학습 (흰 벽 구멍·안개)
     seed_spacing: float = 0.08       # 심는 점 간격 (m)
-    snap: bool = True                # 학습 후 벽 근처 스플랫을 면에 붙이고 납작하게 -> splat_walls.ply
+    snap: bool = False               # 학습 후 벽 근처 스플랫을 면에 붙임 -> splat_walls.ply (wall_ab RESULTS2: 학습 뒤 붙이면 PSNR 손해 -> 기본 끔)
     band: float = 0.03               # 면에서 이 거리(m) 안의 스플랫만 붙임 (액자 등 입체감 보호, 지운 의견 ±3 cm)
     color_tol: float = 0.12          # 그 자리 벽 색과 채널 최대 차이가 이보다 크면 안 붙임 (0..1, 벽에 붙은 물체 보호)
-    remove_behind: bool = True       # 벽 뒤(문 구멍 아닌 곳) 부유물 지우기
+    flatten: bool = False            # snap 때 법선 방향으로 납작하게도 (False = 면 위로 옮기기만; RESULTS2: 납작하게가 손해의 대부분)
+    remove_behind: bool = False      # snap 때 벽 뒤(문 구멍 아닌 곳) 부유물 지우기 (RESULTS2: 학습된 벽 일부를 지워 비침 -> 기본 끔)
     search: float = 0.30             # 도면 면에서 이 거리(m) 안의 정합 점으로 실제 면을 찾음
-    repair: bool = True              # snap 뒤 면에서 비치거나 빈 칸을 둘레 스플랫 복사로 메움 -> splat_repaired.ply
+    trust_plan_dims: bool = False    # 줄자로 잰 도면 치수를 믿음: 점이 없어 못 맞춘 벽을 맞춘 평행 벽 + 도면 폭으로 추정 ("infer")
+    repair: bool = False             # snap 뒤 면에서 비치거나 빈 칸을 둘레 스플랫 복사로 메움 -> splat_repaired.ply (snap 필요, 기본 끔)
     repair_min_cover: float = 0.5    # 덮임(0..1)이 이보다 낮은 칸을 메움
     repair_max_hole_m2: float = 4.0  # 이보다 큰 구멍은 안 메움 (못 본 넓은 면을 지어내지 않도록)
     texture: bool = True             # 메울 색을 면 텍스처에서: 실제 사진 투영 > PatchMatch 메우기 (walls/tex/*.png, 고쳐도 됨)
@@ -79,7 +81,7 @@ class CleanupCfg:
     """학습 후 자동 정리 (모든 구간, snap 뒤·repair 앞). stages/snap.Cleanup, walls/cleanup.py.
     바늘 쪼개기로 스플랫 수가 늘어남 (기본값에서 바늘 1개 -> 보통 7~8 조각). 증가는 clean.json·보고서에 기록만."""
     enabled: bool = True             # splat_clean.ply 를 만들고 repair·fill·merge 가 그것을 씀
-    steps: list[str] = field(default_factory=lambda: list(CLEANUP_STEPS))   # 차례대로. 빼면 그 단계 안 함
+    steps: list[str] = field(default_factory=lambda: ["floaters"])   # 차례대로 (CLEANUP_STEPS 중). RESULTS2: floaters 만 이득, 나머지는 영향 없음
 
 
 @dataclass

@@ -149,15 +149,19 @@ register는 이걸 COLMAP DB `pose_priors` 표에 넣고 `pose_prior_mapper`를 
 
 - 면: `n·x = d`, n 은 방 안쪽. 벽은 방 다각형의 변 하나, 바닥·천장은 방 하나 (`walls/planes.py`).
 - `planes`는 정합 점으로 다시 맞춘 면(점이 모자라면 도면 그대로, `source: "plan"`), `plan_planes`는 도면 그대로.
-- `data_seed/`: `data_clean/`과 같은 사진(링크) + `sparse/0`에 면 위 초기 점(색은 사진에서, 트랙 없음)을 더한 모델. 초기 점은 맞춘 면(`fit[].source == "fit"`)에만.
+- `fit[].source`: `"fit"`(정합 점으로 맞춤; `relaxed`·`offset_only`·`n_front_excluded` 는 느슨한 기준·기울기 0·튀어나온 물체로 뺀 점 수),
+  `"infer"`(`walls.trust_plan_dims` 켰을 때만: 맞춘 평행 면 `inferred_from` 이 옮긴 만큼 옮김), `"plan"`(도면 그대로, `reason`).
+- `data_seed/`: `data_clean/`과 같은 사진(링크) + `sparse/0`에 면 위 초기 점(색은 사진에서, 트랙 없음)을 더한 모델. 초기 점은 맞춘 면(`fit[].source` 가 `"fit"` 또는 `"infer"`)에만.
   train은 `data_seed` > `data_clean` > `data` 순으로 읽되, `data_seed`는 walls 가 이 구간에 적용(`walls.enabled`, 도면 좌표)되고 `walls.seed`가 켜져 있고
   `source_identity`(`{"n_images", "images_bin_sha1"}`, 만든 원본 모델)가 지금 `data_clean`(없으면 `data`) 모델과 같을 때만 쓴다.
-- snap·repair 는 맞춘 면만 쓴다 (도면 그대로인 면은 실제 위치를 모름). `--rerun` 이 앞 단계부터면 walls·snap·repair 는 적용 안 돼도 이전 결과를 `_prev_`로 옮긴다.
+- snap·repair 는 맞춘 면(`fit`/`infer`)만 쓴다 (도면 그대로인 면은 실제 위치를 모름). 둘 다 기본 꺼짐 (`walls.snap`, `walls.repair`; repair 는 snap 필요).
+  repair 는 카메라가 있으면 학습 카메라 광선 덮임(면 뒤 0.5 m 까지)으로 구멍을 다시 확인한다 (`repair.json` `faces[].covered_by_rays_m2`). `--rerun` 이 앞 단계부터면 walls·snap·repair 는 적용 안 돼도 이전 결과를 `_prev_`로 옮긴다.
 - "도면 좌표인가"는 모든 단계에서 `stages.diagnose.model_in_plan_coords` (= `register.json` mapper) 하나로 판정한다.
 
 ### train/<run>/splat_walls.ply, walls.json (snap이 씀)
 
-벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안의 스플랫을 면 위로 옮겨 법선 방향으로 납작하게 한 PLY. 속성 순서는 원본 그대로. `walls.json`에 붙인 수·지운 수·벽 평탄도(불투명 스플랫의 면까지 거리 RMS) 전후, 쓴 면(`planes_used`), 경고(`warnings`).
+`walls.snap` 이 켜졌을 때만 (기본 끔, 11-28). (`walls.remove_behind` 면) 벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안이고
+그 자리 벽 색(칸별 넓이 가중 중앙값)과 `walls.color_tol` 안인 스플랫을 면 위로 옮긴 (`walls.flatten` 이면 법선 방향으로 납작하게도 한) PLY. 속성 순서는 원본 그대로. `walls.json`에 붙인 수·지운 수·벽 평탄도(불투명 스플랫의 면까지 거리 RMS) 전후, 쓴 면(`planes_used`), 경고(`warnings`).
 불투명 스플랫 절반 넘게 도면 방 밖이면 PLY 없이 `walls.json`에 `"skipped": "<이유>"`만 쓴다.
 fill·merge는 `splat_repaired.ply` > `splat_clean.ply` > `splat_walls.ply` > `splat.ply` 중 설정이 켜져 있고 바로 앞 입력보다 새것을 쓴다
 (walls ≥ splat.ply, clean ≥ 그 입력(유효한 walls, 없으면 splat.ply), repaired ≥ 그 입력(유효한 clean, 없으면 walls)). `clean.json`·`repair.json`의
@@ -165,7 +169,7 @@ fill·merge는 `splat_repaired.ply` > `splat_clean.ply` > `splat_walls.ply` > `s
 
 ### train/<run>/splat_clean.ply, clean.json, removed_clean.ply (cleanup이 씀)
 
-`walls/cleanup.cleanup_file`: 부유물(floaters)·아주 큰 것(huge)·바늘 쪼개기(needles)·SH 튐(sh), `project.yaml` `cleanup.steps` 순서. 도면 좌표가 아니어도 돈다.
+`walls/cleanup.cleanup_file`: 부유물(floaters)·아주 큰 것(huge)·바늘 쪼개기(needles)·SH 튐(sh), `project.yaml` `cleanup.steps` 순서 (기본 `[floaters]`, 11-28). 도면 좌표가 아니어도 돈다.
 도면 좌표면 planes.json 면(보호용이라 맞추지 못한 면도 도면 위치로)과 plan 을 넘긴다. `clean.json`: `input`, `plan_coords`, 단계별 정보, `quality_before/after`(count 포함 — 바늘 쪼개기로 수가 늘어남).
 `removed_clean.ply`는 지운 스플랫만 (사람이 확인용).
 

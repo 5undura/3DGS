@@ -41,6 +41,11 @@
   단 법선 방향 ±hole_search(0.3 m) 안 가우시안으로 다시 잰 덮임이 min_cover 이상인 셀은 구멍 아님 (11-28 검토:
   면이 실제 벽과 1.5~2도 기울거나 몇 cm 떨어지면 band 6 cm 밖이라 빈 것으로 보고 실제 벽 앞에 두 번째 벽을 지음).
   어느 면을 넘길지(맞춘 면만)는 stages/snap.py Repair 가 정함.
+  cameras 를 주면 (ray_check, 기본 켬, 11-28 wall_ab 버그 5) 남은 구멍 셀마다 그 셀을 보는 학습 카메라 최대 ray_cams 개에서
+  셀 중심으로 광선을 쏴, 면 앞 ray_front(6 cm) ~ 면 뒤 ray_behind(0.5 m) 구간 가우시안 불투명도를 합친 덮임(시점별 중앙값,
+  _ray_coverage)이 min_cover 이상이면 구멍 아님 (info covered_by_rays_m2). 학습된 3DGS 는 흰 벽을 면 수십 cm 뒤 가우시안이나
+  법선 방향으로 길쭉한 가우시안으로도 그려서, 면에 수직으로 잰 덮임으로는 학습 시점에서 불투명한 벽을 구멍으로 보고
+  위에 두 번째 층을 얹었음 (wall_ab A: -2.1 dB). ray_behind 를 너무 키우면 진짜 구멍 너머 옆방 내용을 덮임으로 셈.
   cameras(도면 좌표 카메라 중심 (M,3)) 를 주면 어떤 카메라도 못 본 셀은 메우지 않음 (방 안쪽, max_view_dist 안,
   입사각 < max_view_deg, 다른 면에 가리지 않음). 넓이 > max_hole_m2 인 구멍은 메우지 않음 (카메라 유무와 무관;
   None 이면 제한 없음). 사진이 '벽이 있다' 고 말하지 않는 큰 빈 곳(유리, 열린 공간, 잘못 맞춘 면)을 막으려고.
@@ -183,19 +188,21 @@ def coverage_map(ply: GaussianPly, plane: Plane, cell: float = 0.05, band: float
 
 # ---------------- 카메라 가시성 ----------------
 def _seen(pl: Plane, j: int, planes: list[Plane], targets: np.ndarray, cams: np.ndarray, *, max_dist: float,
-          max_deg: float, cell: float, max_cams: int) -> np.ndarray:
-    """targets (면 위 3D 점) 마다 어떤 카메라라도 가리지 않고 볼 수 있는지."""
+          max_deg: float, cell: float, max_cams: int, return_matrix: bool = False):
+    """targets (면 위 3D 점) 마다 어떤 카메라라도 가리지 않고 볼 수 있는지.
+    return_matrix=True 면 (seen, 보임 행렬 (targets, 쓴 카메라) bool, 쓴 카메라 중심 (K,3))."""
     seen = np.zeros(len(targets), bool)
     sdc = cams @ pl.n - pl.d
     cams = cams[sdc > 0.05]
     if len(cams) == 0 or len(targets) == 0:
-        return seen
+        return (seen, np.zeros((len(targets), len(cams)), bool), cams) if return_matrix else seen
     if len(cams) > max_cams:
         cams = cams[np.linspace(0, len(cams) - 1, max_cams).round().astype(int)]
     sdc = cams @ pl.n - pl.d
     min_cos = np.cos(np.radians(max_deg))
     others = [(o, k) for k, o in enumerate(planes) if k != j]
     step = max(1, 200_000 // len(cams))
+    mat = np.zeros((len(targets), len(cams)), bool) if return_matrix else None
     for s in range(0, len(targets), step):
         T = targets[s:s + step]
         D = T[:, None, :] - cams[None]                    # 카메라 -> 목표
@@ -216,7 +223,101 @@ def _seen(pl: Plane, j: int, planes: list[Plane], targets: np.ndarray, cams: np.
             blk = o.contains_uv(o.uv(X), 0.0)
             ok[ii[blk], kk[blk]] = False
         seen[s:s + step] = ok.any(1)
-    return seen
+        if mat is not None:
+            mat[s:s + step] = ok
+    return (seen, mat, cams) if return_matrix else seen
+
+
+def _ray_coverage(d: np.ndarray, g: np.ndarray, pl: Plane, targets: np.ndarray, vis: np.ndarray, cams: np.ndarray,
+                  *, behind: float, front: float, n_cams: int, max_search: float = 0.3) -> np.ndarray:
+    """학습 카메라 광선으로 본 덮임 (11-28 wall_ab 버그 5). targets (M,3) 면 위 점마다 그 점을 보는 카메라(vis 행렬)
+    중 최대 n_cams 개(고르게)에서 점까지 쏜 광선이 면 앞 front ~ 면 뒤 behind (법선 방향 부호 거리) 구간에서 지나는
+    가우시안들의 불투명도를 합침: α_i = min(0.99, o_i · max_t exp(-½ (x(t)-μ)ᵀ Σ⁻¹ (x(t)-μ))) (광선 위 최댓값, t 는 구간
+    안으로 자름), 덮임 = 1 - Π(1 - α_i). 시점마다 덮임을 구해 중앙값. 학습된 3DGS 는 무늬 없는 흰 벽을 면에서 수십 cm
+    뒤 가우시안이나 법선 방향으로 길쭉한 가우시안으로도 그리는데, 면에 수직으로 잰 덮임(coverage_map)은 비스듬한
+    학습 시점에서 실제로 불투명한 칸을 구멍으로 봄 (wall_ab A: ±30 cm 로 재도 '구멍' 인 칸의 렌더 alpha 중앙값 1.0).
+    g: 후보 가우시안 번호 (면 근처로 미리 거른 것). 보는 카메라가 없는 점은 nan."""
+    from scipy.spatial import cKDTree
+
+    M = len(targets)
+    out = np.full(M, np.nan)
+    if M == 0 or len(g) == 0 or len(cams) == 0:
+        return out
+    mu = np.stack([d["x"][g], d["y"][g], d["z"][g]], 1).astype(np.float64)
+    q = np.stack([d[f"rot_{i}"][g] for i in range(4)], 1).astype(np.float64)
+    qn = np.linalg.norm(q, axis=1)
+    q[~(np.isfinite(qn) & (qn > 1e-12))] = (1.0, 0.0, 0.0, 0.0)
+    R = plyio.quat_to_mat(q)
+    inv_s2 = np.exp(-2.0 * np.stack([d[f"scale_{i}"][g] for i in range(3)], 1).astype(np.float64))
+    Sinv = np.einsum("nij,nj,nkj->nik", R, inv_s2, R)          # Σ⁻¹ = R S⁻² Rᵀ
+    op = _sigmoid(d["opacity"][g])
+    smax = np.exp(np.stack([d[f"scale_{i}"][g] for i in range(3)], 1).astype(np.float64)).max(1)
+    small = 3.0 * smax <= max_search
+    tree = cKDTree(mu[small]) if small.any() else None
+    small_i = np.flatnonzero(small)
+    big_i = np.flatnonzero(~small)[:4000]                       # 큰 가우시안은 모든 광선의 후보 (개수 제한)
+    rays_t, rays_c, rays_k = [], [], []
+    for m in range(M):
+        ks = np.flatnonzero(vis[m])
+        if len(ks) == 0:
+            continue
+        if len(ks) > n_cams:
+            ks = ks[np.linspace(0, len(ks) - 1, n_cams).round().astype(int)]
+        rays_t.extend([m] * len(ks))
+        rays_c.extend(ks.tolist())
+    if not rays_t:
+        return out
+    rt = np.array(rays_t)
+    C = cams[np.array(rays_c)]
+    T = targets[rt]
+    D = T - C
+    L = np.linalg.norm(D, axis=1)
+    D /= L[:, None]
+    cos_in = np.maximum(-(D @ pl.n), 1e-3)                     # 광선이 면 안쪽에서 들어감 (n 은 방 안쪽)
+    t0 = L - front / cos_in                                     # 면 앞 front 지점
+    t1 = L + behind / cos_in                                    # 면 뒤 behind 지점
+    tau = np.zeros(len(rt))
+    pairs_r, pairs_g = [], []
+    if tree is not None:
+        step = max_search
+        for r in range(len(rt)):
+            n_s = int(np.ceil((t1[r] - t0[r]) / step)) + 1
+            ts = np.linspace(t0[r], t1[r], n_s)
+            pts = C[r] + ts[:, None] * D[r]
+            hits = tree.query_ball_point(pts, max_search)
+            cand = np.unique(np.concatenate([np.asarray(h, np.int64) for h in hits])) if len(hits) else np.zeros(0, np.int64)
+            if len(cand):
+                pairs_r.append(np.full(len(cand), r))
+                pairs_g.append(small_i[cand])
+    if len(big_i):
+        pairs_r.append(np.repeat(np.arange(len(rt)), len(big_i)))
+        pairs_g.append(np.tile(big_i, len(rt)))
+    if pairs_r:
+        pr = np.concatenate(pairs_r)
+        pg = np.concatenate(pairs_g)
+        B = 1 << 20
+        for s0 in range(0, len(pr), B):
+            r_, g_ = pr[s0:s0 + B], pg[s0:s0 + B]
+            o = C[r_]
+            dd = D[r_]
+            dm = mu[g_] - o
+            Si = Sinv[g_]
+            Sd = np.einsum("nij,nj->ni", Si, dd)
+            a = np.einsum("ni,ni->n", dd, Sd)
+            b = np.einsum("ni,ni->n", dm, Sd)
+            t = np.clip(b / np.maximum(a, 1e-30), t0[r_], t1[r_])
+            x = o + t[:, None] * dd - mu[g_]
+            qf = np.einsum("ni,nij,nj->n", x, Si, x)
+            al = np.minimum(op[g_] * np.exp(-0.5 * qf), ALPHA_MAX)
+            keep = al > 1e-4
+            tau += np.bincount(r_[keep], weights=-np.log1p(-al[keep]), minlength=len(rt))
+    cov = 1.0 - np.exp(-tau)
+    order = np.argsort(rt, kind="stable")
+    ks_, starts = np.unique(rt[order], return_index=True)
+    ends = np.append(starts[1:], len(order))
+    for m, a0, b0 in zip(ks_, starts, ends):
+        out[m] = float(np.median(cov[order[a0:b0]]))
+    return out
 
 
 # ---------------- 채우기 도움 (splat-repair 에서 고쳐 옮김) ----------------
@@ -280,7 +381,8 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                  uv_margin: float = 0.05, rim_m: float = 0.25, max_donor_sigma: float = 0.25,
                  min_donors: int = 8, color_smooth: float = 1.0, tone_sigma: float = 0.3, passes: int = 6,
                  max_view_dist: float = 12.0, max_view_deg: float = 80.0, max_cams: int = 256,
-                 texture: dict | None = None, texture_rest: str = "keep", hole_search: float | None = 0.30
+                 texture: dict | None = None, texture_rest: str = "keep", hole_search: float | None = 0.30,
+                 ray_check: bool = True, ray_behind: float = 0.5, ray_front: float = 0.06, ray_cams: int = 5
                  ) -> tuple[GaussianPly, dict]:
     """면마다 덮임 < min_cover 인 셀(문 구멍 제외)을 같은 면 둘레 기증자의 통째 복사로 메운 새 PLY. 규칙은 모듈 설명.
 
@@ -309,7 +411,9 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                              "cameras": None if cams is None else int(len(cams)), "band": band,
                              "rim_m": rim_m, "max_donor_sigma": max_donor_sigma, "color_smooth": color_smooth,
                              "tone_sigma": tone_sigma, "passes": passes,
-                             "texture": None if not texture else sorted(texture), "texture_rest": texture_rest}}
+                             "texture": None if not texture else sorted(texture), "texture_rest": texture_rest,
+                             "hole_search": hole_search, "ray_check": bool(ray_check and cams is not None),
+                             "ray_behind": ray_behind, "ray_front": ray_front, "ray_cams": ray_cams}}
     new_parts: list[np.ndarray] = []
     cell_a = cell * cell
     for j, pl in enumerate(planes):
@@ -338,6 +442,21 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
             wide_cov = inside & (tau_w >= tau_thr)
             fi["covered_off_plane_m2"] = float((bad & wide_cov).sum() * cell_a)
             bad &= ~wide_cov
+        ray_cov = np.zeros_like(bad)
+        if cams is not None and ray_check and bad.any():
+            # 학습 카메라 광선으로 다시 잼: 비스듬한 시점에서 면 뒤 ray_behind 안 가우시안이 이미 불투명하게 그리면 구멍 아님
+            cv_, cu_ = np.nonzero(bad)
+            T = pl.point((cu_ + 0.5) * cell, (cv_ + 0.5) * cell)
+            _, vmat, vcams = _seen(pl, j, planes, T, cams, max_dist=max_view_dist, max_deg=max_view_deg, cell=cell,
+                                   max_cams=max_cams, return_matrix=True)
+            sd_all = xyz @ pl.n - pl.d
+            gr_ = np.flatnonzero((sd_all > -(ray_behind + 0.3)) & (sd_all < ray_front + 0.3)
+                                 & pl.contains_uv(pl.uv(xyz), 3.0 * ray_behind))
+            rc = _ray_coverage(d, gr_, pl, T, vmat, vcams, behind=ray_behind, front=ray_front, n_cams=ray_cams)
+            hit = np.isfinite(rc) & (rc >= min_cover)
+            ray_cov[cv_[hit], cu_[hit]] = True
+            fi["covered_by_rays_m2"] = float(hit.sum() * cell_a)
+            bad &= ~ray_cov
         fi["hole_m2_before"] = float(bad.sum() * cell_a)
         fi["cover_before"] = float(1.0 - bad.sum() / n_in)
         if not bad.any():
@@ -460,7 +579,7 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                 tau += _raster_tau(nuv[ngood], na[ngood], nb_[ngood], nc[ngood], nal[ngood], cell, nu, nv)
                 todo = tau[cy, cx] < tau_thr
         new_parts.extend(added_face)
-        after = inside & (tau < tau_thr) & ~wide_cov
+        after = inside & (tau < tau_thr) & ~wide_cov & ~ray_cov
         fi["hole_m2_after"] = float(after.sum() * cell_a)
         fi["cover_after"] = float(1.0 - after.sum() / n_in)
     if new_parts:

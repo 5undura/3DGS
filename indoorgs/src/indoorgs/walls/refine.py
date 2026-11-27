@@ -99,10 +99,201 @@ def _wlsq(A: np.ndarray, s: np.ndarray, w: np.ndarray) -> np.ndarray:
     return sol
 
 
-def _fit_face(u, v, s, w, thr, max_tan, rng, iters=200):
-    """s = a + b u + c v 강건 맞춤. 돌려줌: (a, b, c, inlier 마스크, clamped)."""
+def _irls(A, s, w, sol, thr, iters=15):
+    """Huber IRLS (k = thr/2, 3·thr 넘는 잔차는 버림). sol 에서 시작."""
+    k = thr / 2
+    for _ in range(iters):
+        r = np.abs(A @ sol - s)
+        hw = np.where(r <= k, 1.0, k / np.maximum(r, 1e-12)) * (r < 3 * thr)
+        if (hw > 0).sum() < A.shape[1]:
+            break
+        new = _wlsq(A, s, w * hw)
+        if np.allclose(new, sol, atol=1e-7):
+            sol = new
+            break
+        sol = new
+    return sol
+
+
+def _clamp_tilt(A, s, w, u, v, sol, thr, max_tan):
+    t = math.hypot(sol[1], sol[2])
+    if t <= max_tan:
+        return sol, False
+    sol = sol.copy()
+    sol[1:] *= max_tan / t
+    for _ in range(10):
+        r = s - sol[1] * u - sol[2] * v
+        m = np.abs(r - sol[0]) < thr
+        if not m.any():
+            break
+        sol[0] = float(np.average(r[m], weights=w[m]))
+    return sol, True
+
+
+def _cell_keys(u, v, cell):
+    iu = np.floor((u - u.min()) / cell).astype(np.int64)
+    iv = np.floor((v - v.min()) / cell).astype(np.int64)
+    return iu, iv, int(iu.max()) + 1, int(iv.max()) + 1
+
+
+def _refit(A, s, w, keep, sol, thr, cols):
+    """keep 점으로 IRLS, cols (예: [0], [0, 1], [0, 1, 2]) 열만 풀고 나머지 계수는 0."""
+    cols = list(cols)
+    sub = _irls(A[keep][:, cols], s[keep], w[keep], sol[cols], thr)
+    out = np.zeros(3)
+    out[cols] = sub
+    return out
+
+
+def _front_patches(u, v, s, w, sol, *, cell, min_cell_pts, front_min, max_protrude, max_front_area):
+    """1단계 (덩어리 단위): 점이 있는 칸을 8-이웃으로 이은 덩어리마다 잔차 중앙값. 다른 덩어리들(사각형 넓이 가중
+    중앙값)보다 뚜렷이 앞이고 (차 > max(front_min, 2·(se_k + se_rest))), 사각형 넓이가 전체의 max_front_area 미만인
+    덩어리 = 튀어나온 물체. 벽 점이 성기고 포스터 점이 촘촘하면 기울기까지 포스터에 맞춰져 칸 단위 잔차로는 안 보이므로
+    (wall_ab corr:w0: 기울기 0.74° 가 포스터를 비탈로 설명) 기울기 없는 잔차로 덩어리끼리 비교."""
+    from scipy import ndimage
+
+    r = s - sol[0]
+    cand = np.abs(r - np.median(r)) < max_protrude
+    iu, iv, nu, nv = _cell_keys(u, v, cell)
+    cnt = np.zeros((nu, nv), np.int64)
+    np.add.at(cnt, (iu[cand], iv[cand]), 1)
+    occ = cnt >= min_cell_pts
+    lab, nl = ndimage.label(occ, structure=np.ones((3, 3)))
+    excl = np.zeros(len(s), bool)
+    if nl < 2:
+        return excl
+    oi, oj = np.nonzero(occ)
+    box_all = (oi.max() - oi.min() + 1) * (oj.max() - oj.min() + 1)
+    pl = lab[iu, iv]
+    meds, ses, boxes = [], [], []
+    for li, sl in enumerate(ndimage.find_objects(lab), start=1):
+        m = cand & (pl == li)
+        rk = r[m]
+        meds.append(float(np.median(rk)))
+        sig = 1.4826 * float(np.median(np.abs(rk - np.median(rk)))) + 0.003
+        ses.append(1.25 * sig / math.sqrt(len(rk)))
+        boxes.append((sl[0].stop - sl[0].start) * (sl[1].stop - sl[1].start))
+    meds, ses, boxes = np.array(meds), np.array(ses), np.array(boxes, float)
+    for k in range(nl):
+        if boxes[k] >= max_front_area * box_all:
+            continue
+        o = np.arange(nl) != k
+        mo = meds[o]
+        order = np.argsort(mo)
+        cw = np.cumsum(boxes[o][order])
+        jm = order[np.searchsorted(cw, 0.5 * cw[-1])]
+        rest = mo[jm]
+        se_rest = ses[o][jm]
+        if meds[k] - rest > max(front_min, 2 * (ses[k] + se_rest)):
+            excl |= cand & (pl == k + 1)
+    return excl
+
+
+def _backmost(u, v, s, w, sol, thr, *, cell=0.25, min_cell_pts=3, front_min=0.006, max_protrude=0.12,
+              max_front_area=0.5, iters=12, offset_only=False):
+    """맞춘 면 앞(방 안쪽)에 몰린 점 무리(포스터·액자 등 튀어나온 물체) 를 빼고 가장 뒤쪽 층에 다시 맞춤.
+    (11-28 wall_ab 버그 2: 흰 벽은 점이 없어 포스터 앞면 점이 벽 점의 절반 넘음 -> 면이 0.76° 기울고 1 cm 앞으로)
+
+    1단계 _front_patches (덩어리 단위, 기울기 없는 잔차). 2단계 (칸 단위, 지금 맞춤 기준): 면을 cell(m) 칸으로
+    나눠 칸마다 잔차 중앙값 m_c (점 min_cell_pts 개 이상). m_c > max(front_min, 2·se_c) (se_c = 1.25·σ/√n_c,
+    σ = 잔차 MAD) 이면 '앞 칸'. 앞 칸을 8-이웃으로 묶은 덩어리마다, 그 덩어리를 감싸는 사각형 넓이가 점이 있는
+    모든 칸을 감싸는 사각형 넓이의 max_front_area 미만일 때만 뺌. 뺄 때마다 IRLS 로 다시 맞춤 (안 바뀔 때까지).
+    즉 '면 일부에만 있는 앞쪽 층' 만 물체로 봄: 벽은 면에 넓게 퍼져 있고 포스터·액자는 좁은 곳에 몰림. 점 개수는
+    보지 않음 (흰 벽은 점이 적어 포스터 점이 더 많을 수 있음). 2단계는 같은 규칙으로 면 일부에만 있는 '뒤 칸'
+    (움푹 들어간 문·창) 도 뺌 -> 넓게 퍼진 층이 벽. 벽 대부분에 걸친 층은 앞이든 뒤든 빼지 않음. 남은 점이 면 가로(세로)의 절반 미만에만 있으면 그 방향 기울기는 0 으로 묶음.
+    offset_only: 기울기 0 으로 묶고 a 만. 반환 (sol, 뺀 점 마스크, 뺀 앞 칸 수)."""
+    from scipy import ndimage
+
     n = len(s)
     A = np.stack([np.ones(n), u, v], 1)
+    su0 = (u.max() - u.min()) if n else 0.0
+    sv0 = (v.max() - v.min()) if n else 0.0
+
+    def cols_for(keep):
+        if offset_only:
+            return [0]
+        c = [0]
+        if su0 > 0 and np.ptp(u[keep]) >= 0.5 * su0:
+            c.append(1)
+        if sv0 > 0 and np.ptp(v[keep]) >= 0.5 * sv0:
+            c.append(2)
+        return c
+
+    excl = _front_patches(u, v, s, w, sol, cell=cell, min_cell_pts=min_cell_pts, front_min=front_min,
+                          max_protrude=max_protrude, max_front_area=max_front_area)
+    if excl.any() and (~excl).sum() >= 10:
+        sol = _refit(A, s, w, ~excl, sol, thr, cols_for(~excl))
+    else:
+        excl = np.zeros(n, bool)
+    patch_excl = excl.copy()
+    iu, iv, nu, nv = _cell_keys(u, v, cell)
+    key = iu * nv + iv
+    n_front = 0
+    for _ in range(iters):
+        r = s - A @ sol
+        cand = (np.abs(r) < max_protrude) & ~patch_excl
+        if cand.sum() < 10:
+            break
+        sig = 1.4826 * np.median(np.abs(r[cand] - np.median(r[cand]))) + 1e-4
+        ks, inv, cnt = np.unique(key[cand], return_inverse=True, return_counts=True)
+        rc = r[cand]
+        med = np.array([np.median(rc[inv == i]) for i in range(len(ks))])
+        occ = cnt >= min_cell_pts
+        if occ.sum() < 2:
+            break
+        se = 1.25 * sig / np.sqrt(np.maximum(cnt, 1))
+        thr_c = np.maximum(front_min, 2 * se)
+        occ_g = np.zeros((nu, nv), bool)
+        occ_g[ks[occ] // nv, ks[occ] % nv] = True
+        oi, oj = np.nonzero(occ_g)
+        box_all = (oi.max() - oi.min() + 1) * (oj.max() - oj.min() + 1)
+        drop_g = np.zeros((nu, nv), bool)
+        # 앞쪽 층(튀어나온 물체)과, 같은 규칙으로 면 일부에만 있는 뒤쪽 층(움푹 들어간 문·창)도 뺌: 넓게 퍼진 층 = 벽
+        for side in (occ & (med > thr_c), occ & (med < -thr_c)):
+            fr_g = np.zeros((nu, nv), bool)
+            fr_g[ks[side] // nv, ks[side] % nv] = True
+            lab, nl = ndimage.label(fr_g, structure=np.ones((3, 3)))
+            for li, sl in enumerate(ndimage.find_objects(lab), start=1):
+                if sl is None:
+                    continue
+                box = (sl[0].stop - sl[0].start) * (sl[1].stop - sl[1].start)
+                if box < max_front_area * box_all:
+                    drop_g[sl][lab[sl] == li] = True
+        new_excl = patch_excl.copy()
+        ci = np.flatnonzero(cand)
+        new_excl[ci] |= drop_g[iu[ci], iv[ci]]
+        if np.array_equal(new_excl, excl):
+            break
+        keep = ~new_excl
+        if keep.sum() < 10:
+            break
+        sol = _refit(A, s, w, keep, sol, thr, cols_for(keep))
+        excl = new_excl
+        n_front = int(drop_g.sum())
+    return sol, excl, n_front
+
+
+def _fit_face(u, v, s, w, thr, max_tan, rng, iters=200, backmost=True, offset_only=False):
+    """s = a + b u + c v 강건 맞춤. 돌려줌: (a, b, c, inlier 마스크, clamped, 뺀 앞쪽 점 마스크).
+    offset_only: 기울기 0 으로 a 만 (점이 면 한쪽 줄에만 있어 기울기를 알 수 없을 때)."""
+    n = len(s)
+    A = np.stack([np.ones(n), u, v], 1)
+    if offset_only:
+        A1 = A[:, :1]
+        best = np.array([np.median(s)])
+        best_cnt = -1
+        for _ in range(min(iters, n)):
+            c = s[rng.integers(n)]
+            cnt = int((np.abs(s - c) < thr).sum())
+            if cnt > best_cnt:
+                best_cnt, best = cnt, np.array([c])
+        sol1 = _irls(A1, s, w, best, thr)
+        sol = np.array([sol1[0], 0.0, 0.0])
+        excl = np.zeros(n, bool)
+        if backmost:
+            sol, excl, _ = _backmost(u, v, s, w, sol, thr, offset_only=True)
+        inl = np.abs(A @ sol - s) < thr
+        return float(sol[0]), 0.0, 0.0, inl, False, excl
     best_cnt, best = -1, None
     for _ in range(iters):
         i3 = rng.choice(n, 3, replace=False)
@@ -117,87 +308,214 @@ def _fit_face(u, v, s, w, thr, max_tan, rng, iters=200):
             best_cnt, best = cnt, sol
     if best is None:   # 모든 가설이 기울기 제한에 걸림: 기울기 0, 중앙값
         best = np.array([np.median(s), 0.0, 0.0])
-    sol = best
-    k = thr / 2
-    for _ in range(15):
-        r = np.abs(A @ sol - s)
-        hw = np.where(r <= k, 1.0, k / np.maximum(r, 1e-12)) * (r < 3 * thr)
-        if (hw > 0).sum() < 3:
-            break
-        new = _wlsq(A, s, w * hw)
-        if np.allclose(new, sol, atol=1e-7):
-            sol = new
-            break
-        sol = new
-    clamped = False
-    t = math.hypot(sol[1], sol[2])
-    if t > max_tan:
-        clamped = True
-        sol = sol.copy()
-        sol[1:] *= max_tan / t
-        for _ in range(10):
-            r = s - sol[1] * u - sol[2] * v
-            m = np.abs(r - sol[0]) < thr
-            if not m.any():
-                break
-            sol[0] = float(np.average(r[m], weights=w[m]))
+    sol = _irls(A, s, w, best, thr)
+    excl = np.zeros(n, bool)
+    if backmost:
+        sol, excl, _ = _backmost(u, v, s, w, sol, thr)
+    keep = ~excl
+    sol, clamped = _clamp_tilt(A[keep], s[keep], w[keep], u[keep], v[keep], sol, thr, max_tan)
     inl = np.abs(A @ sol - s) < thr
-    return float(sol[0]), float(sol[1]), float(sol[2]), inl, clamped
+    return float(sol[0]), float(sol[1]), float(sol[2]), inl, clamped, excl
+
+
+def _span(x: np.ndarray, size: float) -> float:
+    """점들이 면 한 축에서 차지하는 범위 (5~95 백분위) / 면 크기."""
+    if len(x) < 2 or size <= 0:
+        return 0.0
+    lo, hi = np.percentile(x, [5, 95])
+    return float((hi - lo) / size)
+
+
+def _fit_plane(p: Plane, P: np.ndarray, w: np.ndarray, *, relaxed: bool, inlier_thr: float, max_tan: float, rng,
+               min_points: int, min_coverage: float, cell: float, search: float, backmost: bool,
+               relax_min_points: int, relax_min_coverage: float, relax_max_se: float, relax_min_span: float,
+               relax_min_inlier_frac: float) -> tuple[Plane | None, dict]:
+    """면 하나 맞추기. 반환 (맞춘 면 또는 None, 정보). relaxed: 점이 적어도 면에 넓게 퍼져 있고 잘 맞으면 받아줌."""
+    info: dict = {"n_points": 0, "coverage": 0.0, "shift_m": 0.0, "tilt_deg": 0.0, "clamped": False,
+                  "rms_before_m": None, "rms_after_m": None}
+    need = relax_min_points if relaxed else min_points
+    if len(P) < max(3, need):
+        info["reason"] = f"점 부족 ({len(P)} < {need})"
+        return None, info
+    uv = p.uv(P)
+    s = p.signed_dist(P)
+    uc, vc = p.size[0] / 2, p.size[1] / 2
+    su_all, sv_all = _span(uv[:, 0], p.size[0]), _span(uv[:, 1], p.size[1])
+    offset_only = relaxed and min(su_all, sv_all) < 0.5      # 한 줄(걸레받이 등)에만 점: 기울기는 모름 -> 0
+    a, b, c, inl, clamped, excl = _fit_face(uv[:, 0] - uc, uv[:, 1] - vc, s, w, inlier_thr, max_tan, rng,
+                                           backmost=backmost, offset_only=offset_only)
+    res = s - (a + b * (uv[:, 0] - uc) + c * (uv[:, 1] - vc))
+    cov = face_coverage(p, uv[inl], cell)
+    n_in = int(inl.sum())
+    tilt = math.degrees(math.atan(math.hypot(b, c)))
+    rms = float(np.sqrt(np.mean(res[inl] ** 2))) if n_in else None
+    info.update(n_points=n_in, coverage=round(cov, 4), shift_m=a, tilt_deg=tilt, clamped=clamped,
+                rms_before_m=float(np.sqrt(np.mean(s[inl] ** 2))) if n_in else None, rms_after_m=rms,
+                n_front_excluded=int(excl.sum()), offset_only=bool(offset_only))
+    if abs(a) >= 0.9 * search:
+        info["reason"] = f"이동량이 탐색 한계에 닿음 ({a:+.3f} m, search {search})"
+        info["at_bound"] = True
+        return None, info
+    ok = n_in >= min_points and cov >= min_coverage
+    if not ok and relaxed:
+        su, sv = (_span(uv[inl, 0], p.size[0]), _span(uv[inl, 1], p.size[1])) if n_in else (0.0, 0.0)
+        se = (rms / math.sqrt(n_in)) if n_in else 1.0
+        frac = n_in / max(1, len(P))
+        info.update(span_u=round(su, 3), span_v=round(sv, 3), offset_se_m=se, inlier_frac=round(frac, 3))
+        ok = (n_in >= relax_min_points and cov >= relax_min_coverage and se <= relax_max_se
+              and frac >= relax_min_inlier_frac and max(su, sv) >= relax_min_span)
+        if not ok:
+            info["reason"] = (f"느슨한 기준도 못 넘음 (inlier {n_in}, 덮임 {cov:.2f}, 범위 {max(su, sv):.2f}, "
+                              f"se {se * 100:.2f}cm, inlier 비율 {frac:.2f})")
+            return None, info
+        info["relaxed"] = True
+    elif not ok:
+        info["reason"] = (f"inlier 부족 ({n_in} < {min_points})" if n_in < min_points
+                          else f"덮임 부족 ({cov:.2f} < {min_coverage})")
+        return None, info
+    n_new = p.n - b * p.U - c * p.V
+    a0 = a - b * uc - c * vc          # 면 원점에서의 이동량 (Plane.shifted 는 원점 기준)
+    return p.shifted(a0, n_new), info
+
+
+def _infer_from_neighbours(k: int, planes: list[Plane], out: list[Plane], infos: list[dict], xyz: np.ndarray,
+                           owner: np.ndarray, *, max_dev: float, inlier_thr: float, max_angle_deg: float = 2.0,
+                           min_overlap: float = 0.3) -> tuple[Plane | None, dict]:
+    """도면 치수를 믿을 때(trust_plan_dims) 못 맞춘 면 k 를 맞춘 평행 면(마주 보는 벽, 등을 맞댄 공유 벽, 같은 줄 벽)이
+    옮겨 간 만큼 똑같이 옮김 (방이 통째로 평행 이동했다고 봄 = 도면 폭·벽 두께가 맞다고 가정).
+    후보: source "fit" 인 면 중 법선이 max_angle_deg 안으로 평행(같은 쪽 또는 반대쪽)하고, 면 가로 범위가 min_overlap
+    넘게 겹치는 것. 도면상 거리가 가장 가까운 것을 씀 (도면 치수 오차는 거리만큼 쌓이므로).
+    면 k 에 점이 조금이라도 있으면 (추정 위치 ±3·inlier_thr 안 10 개 이상) 그 점들의 중앙값이 추정과 max_dev 넘게
+    다르면 안 씀 (도면을 덜 믿음)."""
+    p = planes[k]
+    cos_min = math.cos(math.radians(max_angle_deg))
+    c_p = p.point(p.size[0] / 2, p.size[1] / 2)
+    best = None
+    for j, q in enumerate(planes):
+        if j == k or infos[j].get("source") != "fit" or q.kind != p.kind:
+            continue
+        cs = float(p.n @ q.n)
+        if abs(cs) < cos_min:
+            continue
+        # 겹침: p 의 가로 범위를 q 의 U 축으로 옮겨 비교 (바닥·천장은 다각형이라 겹침 검사 생략)
+        if p.kind == WALL:
+            ends = np.array([p.point(0, 0), p.point(p.size[0], 0)])
+            qu = np.sort(q.uv(ends)[:, 0])
+            ov = min(qu[1], q.size[0]) - max(qu[0], 0.0)
+            if ov < min_overlap * min(p.size[0], q.size[0]):
+                continue
+        dist = abs(float(q.signed_dist(c_p)))
+        if best is None or dist < best[0]:
+            best = (dist, j, cs)
+    info: dict = {}
+    if best is None:
+        info["reason_infer"] = "평행한 맞춘 면 없음"
+        return None, info
+    dist, j, cs = best
+    q, q2 = planes[j], out[j]
+    x0 = c_p - q.signed_dist(c_p) * q.n                  # p 가운데를 도면 q 위로
+    shift_q = -float(q2.signed_dist(x0))                  # q 가 자기 안쪽 법선으로 옮겨 간 양 (그 자리에서)
+    shift = shift_q * cs
+    pts = xyz[owner == k]
+    if len(pts):
+        sd = p.signed_dist(pts) - shift
+        near = np.abs(sd) < 3 * inlier_thr
+        if near.sum() >= 10 and abs(float(np.median(sd[near]))) > max_dev:
+            info["reason_infer"] = (f"면 점 {int(near.sum())}개의 중앙값이 추정과 {float(np.median(sd[near])) * 100:+.1f}cm "
+                                    f"다름 (> {max_dev * 100:.1f}cm)")
+            return None, info
+        info["n_check_points"] = int(near.sum())
+    info.update(inferred_from=q.id, inferred_dist_m=round(dist, 3), shift_m=shift, tilt_deg=0.0)
+    return p.shifted(shift), info
 
 
 def refine_planes(planes: list[Plane], xyz: np.ndarray, *, weights: np.ndarray | None = None,
                   search: float = 0.30, max_tilt_deg: float = 3.0, min_points: int = 40,
                   min_coverage: float = 0.25, uv_margin: float = 0.10, inlier_thr: float = 0.03,
-                  cell: float = 0.5, edge_band: float = 0.15, rng=0) -> tuple[list[Plane], list[dict]]:
-    """도면 면 -> 점에 맞춘 면. 맞출 수 없는 면은 도면 면 그대로 (info["source"] == "plan")."""
+                  cell: float = 0.5, edge_band: float = 0.15, backmost: bool = True, relaxed: bool = True,
+                  relax_edge_band: float = 0.05, relax_min_points: int = 20, relax_min_coverage: float = 0.08,
+                  relax_max_se: float = 0.004, relax_min_span: float = 0.6, relax_min_inlier_frac: float = 0.6,
+                  trust_plan_dims: bool = False, infer_max_dev: float = 0.015,
+                  rng=0) -> tuple[list[Plane], list[dict]]:
+    """도면 면 -> 점에 맞춘 면. 맞출 수 없는 면은 도면 면 그대로 (info["source"] == "plan").
+
+    11-28 wall_ab 수정:
+    - backmost (기본 켬): 튀어나온 물체(포스터·액자) 앞면 점을 빼고 가장 뒤쪽 층(벽)에 맞춤 (_backmost).
+    - relaxed (기본 켬): 기본 기준(min_points, min_coverage, 모서리 띠 edge_band)으로 못 맞추면 모서리 띠를
+      relax_edge_band 로 줄여(걸레받이·모서리 점) 다시. 그래도 덮임이 모자라면 inlier >= relax_min_points,
+      덮임 >= relax_min_coverage, 이동량 표준오차(rms/√n) <= relax_max_se, inlier 비율 >= relax_min_inlier_frac,
+      면 가로 또는 세로의 relax_min_span 이상에 퍼져 있을 때만 받음 (info["relaxed"]). 점이 한 줄에만 있으면
+      (가로·세로 중 하나가 면의 절반 미만) 기울기 0 으로 이동량만 (info["offset_only"]).
+    - trust_plan_dims (기본 끔, 줄자 도면을 믿을 때만): 그래도 못 맞춘 면을 맞춘 평행 면(마주 보는 벽, 공유 벽)이
+      옮겨 간 만큼 옮김 (source "infer", info["inferred_from"]). 면에 점이 조금 있고 추정과 다르면 안 함 (plan 유지)."""
     xyz = np.asarray(xyz, float).reshape(-1, 3)
     w_all = np.ones(len(xyz)) if weights is None else np.asarray(weights, float).reshape(-1)
     rng = np.random.default_rng(rng)
     max_tan = math.tan(math.radians(max_tilt_deg))
     owner = assign_points(planes, xyz, search, uv_margin)
+    kw = dict(inlier_thr=inlier_thr, max_tan=max_tan, rng=rng, min_points=min_points, min_coverage=min_coverage,
+              cell=cell, search=search, backmost=backmost, relax_min_points=relax_min_points,
+              relax_min_coverage=relax_min_coverage, relax_max_se=relax_max_se, relax_min_span=relax_min_span,
+              relax_min_inlier_frac=relax_min_inlier_frac)
     out, infos = [], []
-    for k, p in enumerate(planes):
+    for k, p in enumerate(planes):                       # 1) 기본 기준
         sel = owner == k
+        base = {"id": p.id, "kind": p.kind, "room": p.room, "source": "plan", "n_assigned": int(sel.sum())}
         if edge_band > 0 and sel.any():     # 모서리 띠의 점은 두 면 어느 쪽인지 애매 -> 맞추기에 안 씀
             j = np.flatnonzero(sel)
             sel[j[edge_distance(p, p.uv(xyz[j])) < edge_band]] = False
-        P = xyz[sel]
-        w = w_all[sel]
-        info = {"id": p.id, "kind": p.kind, "room": p.room, "source": "plan", "n_assigned": int(sel.sum()),
-                "n_points": 0, "coverage": 0.0, "shift_m": 0.0, "tilt_deg": 0.0, "clamped": False,
-                "rms_before_m": None, "rms_after_m": None}
-        if len(P) < max(3, min_points):
-            info["reason"] = f"점 부족 ({len(P)} < {min_points})"
-            out.append(p)
-            infos.append(info)
-            continue
-        uv = p.uv(P)
-        s = p.signed_dist(P)
-        uc, vc = p.size[0] / 2, p.size[1] / 2
-        a, b, c, inl, clamped = _fit_face(uv[:, 0] - uc, uv[:, 1] - vc, s, w, inlier_thr, max_tan, rng)
-        res = s - (a + b * (uv[:, 0] - uc) + c * (uv[:, 1] - vc))
-        cov = face_coverage(p, uv[inl], cell)
-        n_in = int(inl.sum())
-        tilt = math.degrees(math.atan(math.hypot(b, c)))
-        info.update(n_points=n_in, coverage=round(cov, 4), shift_m=a, tilt_deg=tilt, clamped=clamped,
-                    rms_before_m=float(np.sqrt(np.mean(s[inl] ** 2))) if n_in else None,
-                    rms_after_m=float(np.sqrt(np.mean(res[inl] ** 2))) if n_in else None)
-        if n_in < min_points:
-            info["reason"] = f"inlier 부족 ({n_in} < {min_points})"
-        elif cov < min_coverage:
-            info["reason"] = f"덮임 부족 ({cov:.2f} < {min_coverage})"
-        elif abs(a) >= 0.9 * search:
-            info["reason"] = f"이동량이 탐색 한계에 닿음 ({a:+.3f} m, search {search})"
-            info["at_bound"] = True
-        if "reason" in info:
-            out.append(p)
-            infos.append(info)
-            continue
-        n_new = p.n - b * p.U - c * p.V
-        a0 = a - b * uc - c * vc          # 면 원점에서의 이동량 (Plane.shifted 는 원점 기준)
-        out.append(p.shifted(a0, n_new))
-        info["source"] = "fit"
+        fitted, info = _fit_plane(p, xyz[sel], w_all[sel], relaxed=False, **kw)
+        info = {**base, **info, "edge_band": edge_band}
+        if fitted is not None:
+            info["source"] = "fit"
+        out.append(fitted if fitted is not None else p)
         infos.append(info)
+    if relaxed:                                          # 2) 모서리 띠 점 더 쓰기 (+ 못 맞춘 면은 느슨하게)
+        fit1 = [(q, k) for k, q in enumerate(out) if infos[k]["source"] == "fit"]
+        for k, p in enumerate(planes):
+            was_fit = infos[k]["source"] == "fit"
+            if infos[k].get("at_bound"):
+                continue
+            sel = owner == k
+            band_k = min(edge_band, relax_edge_band)
+            if sel.any():
+                j = np.flatnonzero(sel)
+                ed = edge_distance(p, p.uv(xyz[j]))
+                drop = ed < band_k
+                # 모서리 띠(edge_band) 안 점은 이미 맞춘 이웃 면 위(±inlier_thr)에 있으면 그 면 것으로 보고 뺌.
+                # 걸레받이·문틀처럼 이웃 면에서 떨어진 점은 남음.
+                mid = np.flatnonzero((ed < edge_band) & ~drop)
+                for q, kq in fit1:
+                    if kq == k:
+                        continue
+                    if len(mid) == 0:
+                        break
+                    X = xyz[j[mid]]
+                    on = (np.abs(q.signed_dist(X)) < inlier_thr) & q.contains_uv(q.uv(X), uv_margin)
+                    drop[mid[on]] = True
+                    mid = mid[~on]
+                sel[j[drop]] = False
+            fitted, info = _fit_plane(p, xyz[sel], w_all[sel], relaxed=not was_fit, **kw)
+            if fitted is None:
+                if not was_fit:
+                    infos[k]["reason_relaxed"] = info.get("reason")
+                continue
+            infos[k] = {**{x: infos[k][x] for x in ("id", "kind", "room", "n_assigned")}, **info,
+                        "edge_band": band_k, "source": "fit"}
+            infos[k].pop("reason", None)
+            out[k] = fitted
+    if trust_plan_dims:
+        for k, p in enumerate(planes):
+            if infos[k]["source"] != "plan" or infos[k].get("at_bound"):
+                continue
+            q, inf = _infer_from_neighbours(k, planes, out, infos, xyz, owner, max_dev=infer_max_dev,
+                                            inlier_thr=inlier_thr)
+            if q is None:
+                infos[k]["reason_infer"] = inf.get("reason_infer")
+                continue
+            infos[k].update(inf)
+            infos[k]["source"] = "infer"
+            out[k] = q
     return out, infos
 
 

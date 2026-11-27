@@ -332,3 +332,74 @@ def test_snap_file_skips_ply_not_in_plan_coords(tmp_path):
     plyio.write(tmp_path / "in.ply", _sheet_ply(P))
     info = snap.snap_file(tmp_path / "in.ply", tmp_path / "out.ply", planes_from_plan(plan), plan)
     assert info["skipped"] and info["in_rooms_frac"] < 0.5 and not (tmp_path / "out.ply").exists()
+
+
+# ---------------- wall_ab 버그 1: 벽 색 기준이 가우시안 개수 중앙값 ----------------
+def _poster_cell_ply():
+    """방 A 북쪽 벽, 1 m 칸 (u 2..3, v 1..2) 의 48% 를 덮는 포스터 (벽 앞 2 cm, 파랑, 작은 가우시안이 촘촘히 = 칸 가우시안의
+    약 86%) + 나머지는 흰 벽 (큰 가우시안이 성기게, 벽 위 ±5 mm). 반환 (ply, planes, 북쪽 벽 번호, 포스터 마스크)."""
+    plan = make_plan()
+    planes = planes_from_plan(plan, ["A"])
+    j = next(k for k, p in enumerate(planes) if p.kind == "wall" and abs(p.n[1] + 1) < 1e-6)   # y=3 벽 (n = -y)
+    pl = planes[j]
+    rng = np.random.default_rng(3)
+    uw, vw = np.meshgrid(np.arange(0.04, pl.size[0], 0.08), np.arange(0.04, 2.5, 0.08))
+    uw, vw = uw.ravel(), vw.ravel()
+    in_poster = (uw > 2.0) & (uw < 3.0) & (vw > 1.0) & (vw < 1.48)
+    uw, vw = uw[~in_poster], vw[~in_poster]
+    up, vp = np.meshgrid(np.arange(2.0155, 3.0, 0.031), np.arange(1.0155, 1.48, 0.031))
+    up, vp = up.ravel(), vp.ravel()
+    nW, nP = len(uw), len(up)
+    P = np.vstack([pl.point(uw, vw) + pl.n * rng.uniform(-0.005, 0.005, (nW, 1)),
+                   pl.point(up, vp) + pl.n * 0.02])
+    ply = plyio.make(nW + nP, plyio.brush_names(1))
+    d = ply.data
+    for i, c in enumerate("xyz"):
+        d[c] = P[:, i]
+    d["rot_0"] = 1.0
+    sc = np.r_[np.full(nW, 0.045), np.full(nP, 0.0175)]
+    for k in range(3):
+        d[f"scale_{k}"] = np.log(sc)
+    d["opacity"] = 3.0
+    white = (np.array([0.86, 0.85, 0.82]) - 0.5) / plyio.SH_C0
+    blue = (np.array([0.18, 0.31, 0.50]) - 0.5) / plyio.SH_C0
+    for c in range(3):
+        d[f"f_dc_{c}"][:nW] = white[c]
+        d[f"f_dc_{c}"][nW:] = blue[c]
+    poster = np.r_[np.zeros(nW, bool), np.ones(nP, bool)]
+    return ply, planes, j, poster
+
+
+def test_wall_colors_area_weighted_poster_cell():
+    """포스터가 칸 넓이의 48% 지만 가우시안의 약 86%: 기준 색은 흰 벽이어야 함 (예전 개수 중앙값은 포스터 파랑)."""
+    ply, planes, j, poster = _poster_cell_ply()
+    pl = planes[j]
+    uv = pl.uv(ply.xyz)
+    cellm = (uv[:, 0] > 2) & (uv[:, 0] < 3) & (uv[:, 1] > 1) & (uv[:, 1] < 2)
+    assert 0.83 < poster[cellm].mean() < 0.9
+    white = np.array([0.86, 0.85, 0.82])
+    grid, _ = snap.wall_colors(ply, planes, band=0.03)[j]
+    np.testing.assert_allclose(grid[2, 1], white, atol=0.02)
+    old, _ = snap.wall_colors(ply, planes, band=0.03, weighting="count")[j]
+    assert np.abs(old[2, 1] - white).max() > 0.2                      # 예전 방식은 포스터 색 (버그 재현)
+    out, info = snap.snap_to_planes(ply, planes)                       # 기본값 band 3 cm, color_tol 0.12
+    np.testing.assert_array_equal(out.data[poster], ply.data[poster])  # 포스터는 그대로 (입체감)
+    sd = pl.signed_dist(out.xyz[~poster])
+    assert np.mean(np.abs(sd) < 1e-5) > 0.95                           # 흰 벽은 붙음
+    assert info["n_skipped_color"] >= poster.sum()
+
+
+def test_wall_colors_from_texture():
+    """면 텍스처가 있으면 칸 기준 색 = 그 칸 사진 픽셀 중앙값 (가우시안이 전부 포스터 색이어도 흰 벽)."""
+    from indoorgs.walls import facetex
+    ply, planes, j, poster = _poster_cell_ply()
+    pl = planes[j]
+    H, W, uvc, inside = facetex.texture_grid(pl, 0.02)
+    img = np.zeros((H, W, 3), np.uint8)
+    img[:] = (219, 217, 209)
+    pm = (uvc[..., 0] > 2) & (uvc[..., 0] < 3) & (uvc[..., 1] > 1) & (uvc[..., 1] < 1.48)
+    img[pm] = (46, 79, 128)
+    tex = facetex.FaceTexture(pl.id, 0.02, img, inside.astype(np.uint8), inside.astype(np.uint16), inside, pl.size)
+    only_poster = ply.select(poster) if hasattr(ply, "select") else plyio.GaussianPly(ply.data[poster], [])
+    grid, _ = snap.wall_colors(only_poster, planes, band=0.03, texture={pl.id: tex})[j]
+    np.testing.assert_allclose(grid[2, 1], np.array([219, 217, 209]) / 255, atol=0.01)

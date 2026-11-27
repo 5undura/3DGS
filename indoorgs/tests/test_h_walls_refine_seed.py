@@ -344,3 +344,106 @@ def test_shared_wall_points_split_by_side():
     pc = planes_from_plan(Plan([C], []))
     o = assign_points(pc, np.array([[0.05, 1.5, 1.0], [0.35, 1.5, 1.0]]))
     assert [pc[k].id for k in o] == ["C:w3", "C:w1"]
+
+
+# ---------------- 11-28 wall_ab 버그 2·3: 튀어나온 물체, 흰 벽 ----------------
+def _poster_wall_points(rng, p, n_wall=400, n_poster=450, depth=0.025, sigma=0.005):
+    """벽 점은 몇 군데 작은 무리(스위치·표지·문틀 줄)에만, 포스터(u 1.4~2.0, v 1.05~1.85) 앞면 점은 촘촘히 (전체의 53%)."""
+    k = n_wall // 4
+    u = np.concatenate([rng.uniform(0.5, 0.7, k), rng.uniform(4.5, 4.8, k), np.full(k, 3.0) + rng.normal(0, 0.02, k),
+                        rng.uniform(5.0, 5.4, n_wall - 3 * k)])
+    v = np.concatenate([rng.uniform(1.1, 1.3, k), rng.uniform(1.0, 1.4, k), rng.uniform(0.3, 2.2, k),
+                        rng.uniform(1.6, 1.9, n_wall - 3 * k)])
+    wall = p.point(u, v) + rng.normal(0, sigma, n_wall)[:, None] * p.n
+    up, vp = rng.uniform(1.4, 2.0, n_poster), rng.uniform(1.05, 1.85, n_poster)
+    poster = p.point(up, vp) + (depth + rng.normal(0, sigma, n_poster))[:, None] * p.n
+    return wall, poster
+
+
+def test_refine_backmost_ignores_protruding_poster():
+    """포스터 앞면 점이 벽 점의 53% (2.5 cm 앞): 예전엔 면이 포스터 쪽으로 기울고 앞으로 옴. 이제 뒤쪽 층(벽)에 맞춤."""
+    plan = make_plan(door_ab=False, room_b=False)
+    P = by_id(wp.planes_from_plan(plan))
+    p = P["A:w0"]
+    rng = np.random.default_rng(7)
+    wall, poster = _poster_wall_points(rng, p)
+    assert 0.5 < len(poster) / (len(wall) + len(poster)) < 0.56
+    xyz = np.vstack([wall, poster])
+    out, info = refine_planes([p], xyz)
+    assert info[0]["source"] == "fit"
+    assert info[0]["tilt_deg"] < 0.1, info[0]
+    assert abs(info[0]["shift_m"]) < 0.005, info[0]
+    assert info[0]["n_front_excluded"] >= 0.9 * len(poster)
+    old, oinfo = refine_planes([p], xyz, backmost=False)                  # 예전 방식 (버그 재현)
+    assert oinfo[0]["tilt_deg"] > 0.3 or abs(oinfo[0]["shift_m"]) > 0.008
+
+
+def test_refine_backmost_keeps_wall_over_recessed_door():
+    """벽에 넓게 점이 있고 문(0.9 x 2 m)이 3 cm 뒤로 들어가 점이 많아도: 뒤쪽(문)이 아니라 넓은 쪽(벽)에 맞춤."""
+    plan = make_plan(door_ab=False, room_b=False)
+    p = by_id(wp.planes_from_plan(plan))["A:w0"]
+    rng = np.random.default_rng(8)
+    n = 500
+    u, v = rng.uniform(0.2, 5.8, n), rng.uniform(0.2, 2.4, n)
+    keep = ~((u > 2.0) & (u < 2.9) & (v < 2.0))
+    wall = p.point(u[keep], v[keep]) + rng.normal(0, 0.01, keep.sum())[:, None] * p.n
+    du, dv = rng.uniform(2.0, 2.9, 600), rng.uniform(0.2, 2.0, 600)
+    door = p.point(du, dv) + (-0.03 + rng.normal(0, 0.01, 600))[:, None] * p.n
+    out, info = refine_planes([p], np.vstack([wall, door]))
+    assert info[0]["source"] == "fit"
+    assert abs(info[0]["shift_m"]) < 0.005 and info[0]["tilt_deg"] < 0.15, info[0]
+
+
+def test_refine_relaxed_baseboard_only_white_wall():
+    """흰 벽: 점이 걸레받이 윗선(v 0.10)과 바닥 모서리 근처 줄에만 (30 개). 예전엔 점 부족·모서리 띠로 도면 그대로.
+    이제 모서리 띠를 줄이고(바닥 위 점은 맞춘 바닥 것으로 빼고) 기울기 0 으로 이동량만 맞춤."""
+    plan = make_plan(door_ab=False, room_b=False)
+    P = by_id(wp.planes_from_plan(plan))
+    true_w = P["A:w2"].shifted(-0.04)                                      # 실제 벽은 도면보다 4 cm 바깥
+    rng = np.random.default_rng(9)
+    u = rng.uniform(0.3, 5.7, 30)
+    base = true_w.point(u, np.full(30, 0.10)) + rng.normal(0, 0.006, 30)[:, None] * true_w.n
+    fl = P["A:floor"]
+    floor_pts = np.column_stack([rng.uniform(0.3, 5.7, 1500), rng.uniform(0.3, 2.7, 1500), rng.normal(0, 0.005, 1500)])
+    corner = true_w.point(rng.uniform(0.3, 5.7, 40), np.zeros(40)) + true_w.n * rng.uniform(0.0, 0.08, (40, 1))
+    corner[:, 2] = rng.normal(0, 0.004, 40)                                # 바닥 위 (벽 앞 바닥) 점
+    xyz = np.vstack([base, floor_pts, corner])
+    out, info = refine_planes([P["A:w2"], fl], xyz)
+    I = {d["id"]: d for d in info}
+    old, oinfo = refine_planes([P["A:w2"], fl], xyz, relaxed=False)
+    assert {d["id"]: d for d in oinfo}["A:w2"]["source"] == "plan"
+    assert I["A:w2"]["source"] == "fit", I["A:w2"]
+    assert I["A:w2"]["offset_only"] and I["A:w2"]["tilt_deg"] == 0.0
+    assert abs(I["A:w2"]["shift_m"] + 0.04) < 0.005
+
+
+def test_refine_relaxed_rejects_scattered_disagreeing_points():
+    """점이 적고 서로 안 맞으면 (잡음 5 cm) 느슨한 기준으로도 안 맞춤 -> 도면 그대로."""
+    plan = make_plan(door_ab=False, room_b=False)
+    p = by_id(wp.planes_from_plan(plan))["A:w2"]
+    rng = np.random.default_rng(10)
+    X = p.point(rng.uniform(0.3, 5.7, 25), rng.uniform(0.3, 2.3, 25)) + rng.normal(0, 0.05, 25)[:, None] * p.n
+    out, info = refine_planes([p], X)
+    assert info[0]["source"] == "plan"
+
+
+def test_refine_infer_from_opposite_wall_only_when_trusted():
+    """점이 없는 흰 벽(A:w2): trust_plan_dims 면 마주 보는 맞춘 벽(A:w0, 실제 6 cm 안쪽 = 방 전체가 +y 로 6 cm)과
+    도면 폭으로 위치를 추정 (source "infer"). 기본(끔)이면 도면 그대로. 면 점이 추정과 다르면 안 함."""
+    plan = make_plan(door_ab=False, room_b=False)
+    P = by_id(wp.planes_from_plan(plan))
+    rng = np.random.default_rng(11)
+    t0 = P["A:w0"].shifted(0.06)
+    X0 = t0.point(rng.uniform(0.2, 5.8, 600), rng.uniform(0.2, 2.4, 600)) + rng.normal(0, 0.008, 600)[:, None] * t0.n
+    planes = [P["A:w0"], P["A:w2"]]
+    _, info = refine_planes(planes, X0)
+    assert [d["source"] for d in info] == ["fit", "plan"]
+    out, info = refine_planes(planes, X0, trust_plan_dims=True)
+    assert info[1]["source"] == "infer" and info[1]["inferred_from"] == "A:w0"
+    assert abs(info[1]["shift_m"] + 0.06) < 0.005                           # 북쪽 벽은 바깥(-) 으로 6 cm
+    true_w2 = P["A:w2"].shifted(-0.06)
+    assert abs(true_w2.signed_dist(out[1].point(3.0, 1.3))) < 0.005
+    # 북쪽 벽에 점이 조금 있는데 도면 위치(추정과 6 cm 다름)에 있으면 추정 안 함
+    X2 = P["A:w2"].point(rng.uniform(0.2, 5.8, 15), rng.uniform(0.2, 2.4, 15))
+    _, info = refine_planes(planes, np.vstack([X0, X2]), trust_plan_dims=True, relaxed=False)
+    assert info[1]["source"] == "plan" and "reason_infer" in info[1]

@@ -32,8 +32,25 @@ def wall_points(rng):
     return P + rng.normal(0, 0.005, P.shape)
 
 
-def setup(tmp_path, extra=""):
-    root = make_project(tmp_path / "p", extra_yaml=extra)
+# 11-28 RESULTS2 로 기본값이 바뀜 (snap·repair·remove_behind·flatten 끔, cleanup 은 floaters 만). 이 단계 테스트들은
+# 전체 사슬(snap -> cleanup -> repair)을 확인하므로 예전 값을 명시적으로 켬. extra 의 같은 항목이 이것보다 우선.
+FULL_CHAIN = {"walls": {"snap": True, "repair": True, "remove_behind": True, "flatten": True},
+              "cleanup": {"steps": ["floaters", "huge", "needles", "sh"]}}
+
+
+def _merge_yaml(extra: str) -> str:
+    import yaml
+    d = {k: dict(v) for k, v in FULL_CHAIN.items()}
+    for k, v in (yaml.safe_load(extra) or {}).items():
+        if isinstance(v, dict) and k in d:
+            d[k].update(v)
+        else:
+            d[k] = v
+    return yaml.safe_dump(d, allow_unicode=True)
+
+
+def setup(tmp_path, extra="", full_chain=True):
+    root = make_project(tmp_path / "p", extra_yaml=_merge_yaml(extra) if full_chain else extra)
     p = Project(root)
     (root / "floorplan").mkdir()
     (root / "floorplan" / "plan.json").write_text(json.dumps(PLAN), encoding="utf-8")

@@ -102,11 +102,12 @@ class Walls(Stage):
         planes = wp.planes_from_plan(plan, rooms)
         xyz = np.array([pt.xyz for pt in m.points.values()]) if m.points else np.zeros((0, 3))
         w = np.array([len(pt.track) for pt in m.points.values()], float) if m.points else None
-        fitted, info = refine.refine_planes(planes, xyz, weights=w, search=wc.search)
-        trusted = [q for q, i in zip(fitted, info) if i.get("source") == "fit"]   # 초기 점은 맞춘 면에만
+        fitted, info = refine.refine_planes(planes, xyz, weights=w, search=wc.search,
+                                            trust_plan_dims=wc.trust_plan_dims)
+        trusted = [q for q, i in zip(fitted, info) if i.get("source") in ("fit", "infer")]   # 초기 점은 맞춘 면에만
         before = refine.flatness(xyz, planes)
         after = refine.flatness(xyz, fitted)
-        n_fit = sum(1 for i in info if i.get("source") == "fit")
+        n_fit = sum(1 for i in info if i.get("source") in ("fit", "infer"))
         ctx.log(f"방 {rooms}: 면 {len(planes)}개 중 {n_fit}개를 정합 점으로 다시 맞춤")
         for i in info:
             if i.get("source") == "fit" and abs(i.get("shift_m", 0)) >= 0.05:

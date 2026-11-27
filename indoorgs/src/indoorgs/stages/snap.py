@@ -111,11 +111,14 @@ def load_planes(paths) -> tuple[list, dict, dict]:
     return planes, fit, d
 
 
+TRUSTED_SOURCES = ("fit", "infer")   # "infer" = walls.trust_plan_dims 로 맞춘 평행 면에서 옮긴 면 (사용자가 도면 치수를 믿을 때만 생김)
+
+
 def fitted_planes(planes: list, fit: dict) -> list:
-    """정합 점으로 맞춘 면만 (fit source == "fit"). 도면 그대로인 면(source "plan", 점 부족 등)은 실제 위치를 모르므로
+    """정합 점으로 맞춘 면만 (fit source == "fit", 또는 walls.trust_plan_dims 로 추정한 "infer"). 도면 그대로인 면(source "plan", 점 부족 등)은 실제 위치를 모르므로
     벽 뒤 지우기·붙이기·메우기·초기 점 심기에 안 씀 (11-28 검토: 도면 천장 2.6 m / 실제 2.8 m -> 실제 천장 100% 삭제,
     1.5도 기운 실제 벽 앞에 두 번째 벽). fit 정보가 없는 면도 안 씀."""
-    return [p for p in planes if fit.get(p.id, {}).get("source") == "fit"]
+    return [p for p in planes if fit.get(p.id, {}).get("source") in TRUSTED_SOURCES]
 
 
 class Snap(Stage):
@@ -169,7 +172,7 @@ class Snap(Stage):
                 from ..colmap.runner import move_aside
                 ctx.log(f"낡은 {old.name} -> {move_aside(old, 'prev').name}")
         info = snap.snap_file(src, out, used, plan, band=wc.band, color_tol=wc.color_tol,
-                              remove_behind=wc.remove_behind)
+                              remove_behind=wc.remove_behind, flatten=wc.flatten)
         info["unfitted_planes"] = unfit
         for w in info.get("warnings", []):
             ctx.log(w)
