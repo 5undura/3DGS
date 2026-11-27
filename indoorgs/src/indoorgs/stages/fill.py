@@ -24,7 +24,7 @@ RADIUS_MUL = 3.0       # 반경 배수 (PROGRESS: L7_fill 에서 3 사용)
 
 
 def train_ply(ctx: StageContext) -> Path:
-    """최신 학습 (_2, _3 ...) 의 결과. 벽에 붙인 splat_walls.ply(stages/snap.py) 가 있으면 그것."""
+    """최신 학습 (_2, _3 ...) 의 결과. repaired > clean > walls > splat.ply (stages/snap.best_ply)."""
     from .snap import train_ply as snapped
     return snapped(ctx)
 

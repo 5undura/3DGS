@@ -44,6 +44,8 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
     walls/planes.json  data_seed/      walls (도면 좌표일 때만: 면 다시 맞추기 + 초기 점 심기)
     train/<trainer>_<preset>/splat.ply  eval.json  stats.json   train
     train/<trainer>_<preset>/splat_walls.ply  walls.json      snap (벽에 붙이기, 원본 splat.ply 는 그대로)
+    train/<trainer>_<preset>/splat_clean.ply  clean.json  removed_clean.ply   cleanup (학습 후 정리, 모든 구간)
+    train/<trainer>_<preset>/splat_repaired.ply  repair.json  repair (면 메우기)
     fill/holes_backdrop.ply            fill
   merged/building.ply  merged/layout.json   merge
   report.html                               report
@@ -157,7 +159,15 @@ register는 이걸 COLMAP DB `pose_priors` 표에 넣고 `pose_prior_mapper`를 
 
 벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안의 스플랫을 면 위로 옮겨 법선 방향으로 납작하게 한 PLY. 속성 순서는 원본 그대로. `walls.json`에 붙인 수·지운 수·벽 평탄도(불투명 스플랫의 면까지 거리 RMS) 전후, 쓴 면(`planes_used`), 경고(`warnings`).
 불투명 스플랫 절반 넘게 도면 방 밖이면 PLY 없이 `walls.json`에 `"skipped": "<이유>"`만 쓴다.
-fill·merge는 `splat_repaired.ply` > `splat_walls.ply` > `splat.ply` 중 설정이 켜져 있고 입력보다 새것(시각 repaired ≥ walls ≥ splat.ply)을 쓴다.
+fill·merge는 `splat_repaired.ply` > `splat_clean.ply` > `splat_walls.ply` > `splat.ply` 중 설정이 켜져 있고 바로 앞 입력보다 새것을 쓴다
+(walls ≥ splat.ply, clean ≥ 그 입력(유효한 walls, 없으면 splat.ply), repaired ≥ 그 입력(유효한 clean, 없으면 walls)). `clean.json`·`repair.json`의
+`"input"`(입력 파일 이름)이 지금 고른 입력과 다르면(예: snap 이나 cleanup 을 끔) 그 결과도 안 쓴다 (`stages/snap.best_ply`).
+
+### train/<run>/splat_clean.ply, clean.json, removed_clean.ply (cleanup이 씀)
+
+`walls/cleanup.cleanup_file`: 부유물(floaters)·아주 큰 것(huge)·바늘 쪼개기(needles)·SH 튐(sh), `project.yaml` `cleanup.steps` 순서. 도면 좌표가 아니어도 돈다.
+도면 좌표면 planes.json 면(보호용이라 맞추지 못한 면도 도면 위치로)과 plan 을 넘긴다. `clean.json`: `input`, `plan_coords`, 단계별 정보, `quality_before/after`(count 포함 — 바늘 쪼개기로 수가 늘어남).
+`removed_clean.ply`는 지운 스플랫만 (사람이 확인용).
 
 ### train/<trainer>_<preset>/eval.json, stats.json (train이 씀)
 
@@ -195,7 +205,7 @@ class TrainerAdapter:
     def find_result(self, out_dir) -> Path | None  # 최종 PLY
 ```
 
-`ctx`는 `StageContext(project, section, cfg, log)`. 단계 순서: extract → prior → register → diagnose → walls → train → snap → fill → (모든 구간 후) merge → report. `walls`·`snap`은 도면 좌표 구간에서만 돈다. `prior`는 `plan.json`과 `path.json`이 둘 다 있을 때만 돈다.
+`ctx`는 `StageContext(project, section, cfg, log)`. 단계 순서: extract → prior → register → diagnose → walls → train → snap → cleanup → repair → fill → (모든 구간 후) merge → report. `walls`·`snap`·`repair`는 도면 좌표 구간에서만, `cleanup`은 모든 구간에서 돈다 (`cleanup.enabled`). `prior`는 `plan.json`과 `path.json`이 둘 다 있을 때만 돈다.
 
 ## 6. 작업 규칙
 

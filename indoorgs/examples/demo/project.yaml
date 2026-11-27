@@ -14,3 +14,4 @@ register: {matcher: sequential, mapper: incremental, use_floorplan_prior: true}
 train: {trainer: brush, preset: default}
 fill: {holes_only: true}
 walls: {enabled: true, seed: true, snap: true, band: 0.06, remove_behind: true}
+cleanup: {enabled: true, steps: [floaters, huge, needles, sh]}   # 학습 후 정리 (모든 구간). 바늘 쪼개기로 스플랫 수 증가

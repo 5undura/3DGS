@@ -57,7 +57,7 @@ def _train_runs(sp, train_cfg=None) -> list[dict]:
                 continue
             runs.append({"name": d.name, "trainer": d.name.split("_")[0], "eval": ev, "stats": stt,
                          "ply": (d / "splat.ply").exists(), "latest": d == latest,
-                         "walls": _read(d / "walls.json")})
+                         "walls": _read(d / "walls.json"), "clean": _read(d / "clean.json")})
     return runs
 
 
@@ -224,6 +224,17 @@ def build_html(project) -> str:
                     f"붙임 {_num(w.get('n_moved'))}, 부유물 지움 {_num(w.get('n_removed'))}</li>")
     walls_html = "<ul>" + "".join(wall_notes) + "</ul>" if wall_notes else f"<p>{NONE} (도면 좌표 정합일 때만)</p>"
 
+    from .snap import clean_summary
+    clean_notes = []
+    for s in secs:
+        for r in s["runs"]:
+            c = r.get("clean")
+            if c:
+                where = "도면 좌표, 면 보호" if c.get("plan_coords") else "도면 좌표 아님, 일반 정리"
+                clean_notes.append(f"<li>{_e(s['name'])} / {_e(r['name'])} ({_e(c.get('input'))} → splat_clean.ply, "
+                                   f"{where}): {_e(clean_summary(c))}</li>")
+    clean_html = ("<ul>" + "".join(clean_notes) + "</ul>" if clean_notes else f"<p>{NONE}</p>")
+
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8"><title>IndoorGS 보고서 · {_e(project.root.name)}</title>
@@ -233,6 +244,8 @@ def build_html(project) -> str:
 <p class="sub">반투명 비율 = 불투명도 0.5 미만 스플랫 비율. {TRANSLUCENT_WARN:.0%} 이상이면 VR 에서 벽이 비칠 수 있음.</p>
 <h2>정합 검사</h2>{diag}
 <h2>벽 평탄화</h2>{walls_html}
+<h2>학습 후 정리</h2>{clean_html}
+<p class="sub">지운 스플랫은 학습 폴더의 removed_clean.ply 로 열어 확인. 바늘 쪼개기로 스플랫 수가 늘어남.</p>
 <h2>공간과 카메라 위치</h2>{space}
 <h2>합치기</h2><p>{merged}</p>
 </body></html>

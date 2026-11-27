@@ -71,6 +71,17 @@ class WallsCfg:
     texture: bool = True             # 메울 색을 면 텍스처에서: 실제 사진 투영 > PatchMatch 메우기 (walls/tex/*.png, 고쳐도 됨)
 
 
+CLEANUP_STEPS = ("floaters", "huge", "needles", "sh")   # walls/cleanup.STEPS 와 같은 이름
+
+
+@dataclass
+class CleanupCfg:
+    """학습 후 자동 정리 (모든 구간, snap 뒤·repair 앞). stages/snap.Cleanup, walls/cleanup.py.
+    바늘 쪼개기로 스플랫 수가 늘어남 (기본값에서 바늘 1개 -> 보통 7~8 조각). 증가는 clean.json·보고서에 기록만."""
+    enabled: bool = True             # splat_clean.ply 를 만들고 repair·fill·merge 가 그것을 씀
+    steps: list[str] = field(default_factory=lambda: list(CLEANUP_STEPS))   # 차례대로. 빼면 그 단계 안 함
+
+
 @dataclass
 class ProjectConfig:
     sections: list[Section]
@@ -81,6 +92,7 @@ class ProjectConfig:
     train: TrainCfg = field(default_factory=TrainCfg)
     fill: FillCfg = field(default_factory=FillCfg)
     walls: WallsCfg = field(default_factory=WallsCfg)
+    cleanup: CleanupCfg = field(default_factory=CleanupCfg)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -127,10 +139,14 @@ def parse(data: dict) -> ProjectConfig:
         train=_build(TrainCfg, data.get("train"), "train"),
         fill=_build(FillCfg, data.get("fill"), "fill"),
         walls=_build(WallsCfg, data.get("walls"), "walls"),
+        cleanup=_build(CleanupCfg, data.get("cleanup"), "cleanup"),
     )
-    extra = set(data) - {"sections", "tools", "gpu_profile", "extract", "register", "train", "fill", "walls"}
+    extra = set(data) - {"sections", "tools", "gpu_profile", "extract", "register", "train", "fill", "walls", "cleanup"}
     if extra:
         raise ConfigError(f"모르는 최상위 항목 {sorted(extra)}")
+    st = cfg.cleanup.steps
+    if not isinstance(st, list) or any(x not in CLEANUP_STEPS for x in st) or len(set(st)) != len(st):
+        raise ConfigError(f"cleanup.steps = {st!r}: {list(CLEANUP_STEPS)} 중에서 겹치지 않게 (목록)")
     for path, allowed in _ENUMS.items():
         v = cfg
         for p in path:
