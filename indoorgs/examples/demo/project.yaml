@@ -1,0 +1,15 @@
+# 형식 예시 (영상 없음). 학생회관 지하 복도 1 + 33B117 을 박스로 대충 놓은 것 — 치수는 예시값
+tools:
+  colmap: C:/tools/colmap/COLMAP.bat
+  brush: C:/tools/brush/brush_app.exe
+  lichtfeld: null
+gpu_profile: 8gb
+sections:
+  - name: corridor1
+    video: D:/capture/1.MP4
+  - name: room_b117
+    video: D:/capture/5.MP4
+extract: {min_diff: 4, sharp_ratio: 0.8}
+register: {matcher: sequential, mapper: incremental, use_floorplan_prior: true}
+train: {trainer: brush, preset: default}
+fill: {holes_only: true}

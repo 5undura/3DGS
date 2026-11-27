@@ -1,0 +1,13 @@
+{
+ "version": 1,
+ "units": "m",
+ "rooms": [
+  {"id": "corridor1", "name": "복도 1 (예시 치수)", "box": {"center": [-2.37, 14], "size": [2.4, 30], "yaw_deg": 0}, "floor_z": 0, "ceiling_z": 2.7},
+  {"id": "b117", "name": "33B117 (예시 치수)", "floor": [[-1.17, 2.5], [-1.17, 9.5], [6.5, 9.5], [6.5, 2.5]], "floor_z": 0, "ceiling_z": 2.6}
+ ],
+ "doors": [
+  {"id": "b117_s", "rooms": ["corridor1", "b117"], "center": [-1.17, 3.97], "width": 1.0, "height": 2.1},
+  {"id": "b117_n", "rooms": ["corridor1", "b117"], "center": [-1.17, 7.87], "width": 0.6, "height": 2.1}
+ ],
+ "source": {"kind": "boxes"}
+}

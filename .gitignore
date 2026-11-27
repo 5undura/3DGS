@@ -31,3 +31,7 @@ __pycache__/
 *.pyc
 .vscode/
 Thumbs.db
+
+# IndoorGS
+*.egg-info/
+.pytest_cache/
