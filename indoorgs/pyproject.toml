@@ -11,7 +11,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["fastapi>=0.110", "uvicorn>=0.29"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "httpx>=0.27"]   # httpx: FastAPI TestClient (GUI 테스트)
 
 [project.scripts]
 indoorgs = "indoorgs.cli:main"
@@ -22,3 +22,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+indoorgs = ["gui/static/*"]   # GUI 화면 파일
