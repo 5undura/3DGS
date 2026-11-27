@@ -15,6 +15,8 @@ from .walls import walls_apply
 
 SNAP_PLY = "splat_walls.ply"
 SNAP_JSON = "walls.json"
+REPAIR_PLY = "splat_repaired.ply"
+REPAIR_JSON = "repair.json"
 
 
 def latest_run(ctx: StageContext) -> Path:
@@ -23,9 +25,15 @@ def latest_run(ctx: StageContext) -> Path:
 
 
 def train_ply(ctx: StageContext) -> Path:
-    """fill·merge 가 쓸 학습 결과: 벽에 붙인 것이 있으면 그것, 없으면 splat.ply."""
-    run = latest_run(ctx)
-    return run / SNAP_PLY if (run / SNAP_PLY).exists() else run / "splat.ply"
+    """fill·merge 가 쓸 학습 결과: 메운 것 > 벽에 붙인 것 > splat.ply."""
+    return best_ply(latest_run(ctx))
+
+
+def best_ply(run: Path) -> Path:
+    for name in (REPAIR_PLY, SNAP_PLY):
+        if (run / name).exists():
+            return run / name
+    return run / "splat.ply"
 
 
 class Snap(Stage):
@@ -59,3 +67,54 @@ class Snap(Stage):
                f"{fa.get('thick_m', float('nan')) * 100:.1f}cm, "
                f"붙임 {info.get('n_moved', 0):,}, 지움 {info.get('n_removed', 0):,}")
         return StageResult(True, msg, self.outputs(ctx))
+
+
+class Repair(Stage):
+    """4¾. 면 메우기 (snap 뒤). splat_walls.ply -> splat_repaired.ply, repair.json (walls/repair.py)
+
+    면을 칸으로 나눠 불투명하게 덮인 정도를 재고, 덜 덮인 칸(비치거나 빈 곳)을 둘레의 멀쩡한 스플랫을 통째로 복사해 메움
+    (splat-repair Fast Fill 의 rim 방식을 도면 면에 맞게 고친 것, indoorgs/NOTICE). 학습 카메라가 볼 수 있던 칸만 메움."""
+    name = "repair"
+
+    def applies(self, ctx: StageContext) -> bool:
+        wc = ctx.project.cfg.walls
+        return walls_apply(ctx) and wc.snap and wc.repair
+
+    def outputs(self, ctx: StageContext) -> list[Path]:
+        run = latest_run(ctx)
+        return [run / REPAIR_PLY, run / REPAIR_JSON]
+
+    def run(self, ctx: StageContext) -> StageResult:
+        import numpy as np
+        from ..colmap import model as cmodel
+        from ..walls import repair
+        from .walls import source_dir
+
+        p, wc = ctx.paths, ctx.project.cfg.walls
+        run = latest_run(ctx)
+        src = run / SNAP_PLY
+        if not src.exists():
+            return StageResult(False, f"{src} 없음 (snap 먼저)")
+        planes = [wp.plane_from_json(d) for d in schemas.read_json(p.planes_json)["planes"]]
+        cams = None
+        mdir = source_dir(ctx) / "sparse" / "0"
+        if mdir.exists():
+            m = cmodel.read_model(mdir)
+            cams = np.array([im.center for im in m.images.values()]) if m.images else None
+        info = repair.repair_file(src, run / REPAIR_PLY, planes, cameras=cams,
+                                  min_cover=wc.repair_min_cover, max_hole_m2=wc.repair_max_hole_m2)
+        schemas.write_json(run / REPAIR_JSON, {"version": schemas.VERSION, **_jsonable(info)})
+        return StageResult(True, f"메운 스플랫 {info.get('n_added', 0):,}개", self.outputs(ctx))
+
+
+def _jsonable(v):
+    import numpy as np
+    if isinstance(v, dict):
+        return {str(k): _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    if isinstance(v, np.generic):
+        return v.item()
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    return v

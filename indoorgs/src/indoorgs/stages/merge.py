@@ -36,8 +36,8 @@ def section_ply(project, sec, paths) -> Path:
         return paths.fill_ply
     t = project.cfg.train
     run = paths.latest_train_run(t.trainer, t.preset)                      # 최신 학습 (_2, _3 ...)
-    from .snap import SNAP_PLY
-    return run / SNAP_PLY if (run / SNAP_PLY).exists() else run / "splat.ply"   # 벽에 붙인 것 우선
+    from .snap import best_ply
+    return best_ply(run)                     # 메운 것 > 벽에 붙인 것 > splat.ply
 
 
 def read_layout(path: Path, names: list[str]) -> tuple[dict[str, np.ndarray], list[str]]:

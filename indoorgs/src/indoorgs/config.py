@@ -64,6 +64,9 @@ class WallsCfg:
     band: float = 0.06               # 면에서 이 거리(m) 안의 스플랫만 붙임
     remove_behind: bool = True       # 벽 뒤(문 구멍 아닌 곳) 부유물 지우기
     search: float = 0.30             # 도면 면에서 이 거리(m) 안의 정합 점으로 실제 면을 찾음
+    repair: bool = True              # snap 뒤 면에서 비치거나 빈 칸을 둘레 스플랫 복사로 메움 -> splat_repaired.ply
+    repair_min_cover: float = 0.5    # 덮임(0..1)이 이보다 낮은 칸을 메움
+    repair_max_hole_m2: float = 4.0  # 이보다 큰 구멍은 안 메움 (못 본 넓은 면을 지어내지 않도록)
 
 
 @dataclass

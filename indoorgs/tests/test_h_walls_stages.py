@@ -129,3 +129,32 @@ def test_snap_stage(tmp_path, monkeypatch):
     from indoorgs.stages import report
     html = report.build_html(p)
     assert "벽 평탄화" in html and "다시 맞춤" in html and "부유물 지움 5" in html
+
+
+def test_repair_stage_fills_hole(tmp_path):
+    p, ctx, _ = setup(tmp_path, extra="walls: {seed: false}\n")
+    assert walls_stage.Walls().run(ctx).ok
+    run = ctx.paths.train_run("brush", "default")
+    # 북쪽 벽을 촘촘히 덮되 가운데 0.6 m 구멍
+    g = np.mgrid[0.3:5.7:0.04, 0.2:2.4:0.04].reshape(2, -1).T
+    g = g[np.hypot(g[:, 0] - 3.0, g[:, 1] - 1.3) > 0.3]
+    n = len(g)
+    ply = plyio.make(n, plyio.brush_names(2))
+    ply.data["x"], ply.data["y"], ply.data["z"] = g[:, 0], TRUE_NORTH_Y, g[:, 1]
+    ply.data["rot_0"] = 1.0
+    ply.data["scale_0"] = ply.data["scale_2"] = np.log(0.03)
+    ply.data["scale_1"] = np.log(0.003)
+    ply.data["opacity"] = 4.0
+    plyio.write(run / "splat.ply", ply)
+    assert snap_stage.Snap().run(ctx).ok
+    st = snap_stage.Repair()
+    assert st.applies(ctx)
+    res = st.run(ctx)
+    assert res.ok, res.message
+    out = plyio.read(run / snap_stage.REPAIR_PLY)
+    assert out.n > plyio.read(run / snap_stage.SNAP_PLY).n
+    info = json.loads((run / snap_stage.REPAIR_JSON).read_text(encoding="utf-8"))
+    north = info["faces"]["A:w2"]
+    assert north["hole_m2_before"] > 0.1 and north["hole_m2_after"] < 0.02
+    from indoorgs.stages import fill
+    assert fill.train_ply(ctx).name == snap_stage.REPAIR_PLY

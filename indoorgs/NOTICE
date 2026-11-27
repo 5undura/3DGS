@@ -1,0 +1,20 @@
+IndoorGS
+========
+
+Third-party code
+----------------
+
+IndoorGS includes code adapted from splat-repair:
+
+  Splat Repair
+  Copyright 2026 Nicolas Drum
+  https://github.com/NicolasDrum/splat-repair
+  Licensed under the Apache License, Version 2.0.
+
+Adapted and modified in src/indoorgs/walls/repair.py (rim-donor "Fast Fill" from
+core/splatcore/repair.py: _donors_from_rim, the per-cell density of the rim,
+optical-depth deficit from _scale_opacity, _cells, and the whole-donor copy
+principle). The header of that file lists what was taken and how it was changed.
+
+The full text of the Apache License, Version 2.0 is in licenses/Apache-2.0.txt
+(also available at http://www.apache.org/licenses/LICENSE-2.0).
