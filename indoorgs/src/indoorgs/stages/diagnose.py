@@ -105,6 +105,9 @@ class Diagnose(Stage):
     def outputs(self, ctx: StageContext) -> list[Path]:
         return [ctx.paths.diagnose, ctx.paths.data_clean / "sparse" / "0"]
 
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        return [ctx.paths.diagnose, ctx.paths.data_clean]
+
     def run(self, ctx: StageContext) -> StageResult:
         p = ctx.paths
         if not p.data_model.exists():

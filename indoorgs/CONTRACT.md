@@ -50,6 +50,10 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
 
 - 경로는 영문 권장. 한글 경로는 OpenCV `imwrite`/`imread`, COLMAP에서 조용히 실패한 적이 있다. 사진 읽기·쓰기는 `cv2.imdecode`/`imencode`로.
 - 원본(영상, 이전 단계 결과)은 지우거나 덮어쓰지 않는다. 다시 돌리면 `train/brush_default_2`처럼 새 폴더.
+  - `indoorgs run <proj> --rerun <단계>`(`run_all(rerun=)`)로만 다시 돈다. train 은 최신 폴더가 끝났으면 `_2`, `_3`… 새 폴더,
+    다른 단계는 이전 결과(`Stage.prev_targets`)를 `<이름>_prev_<시각>`으로 옮긴 뒤 다시.
+  - fill·merge·report 는 `SectionPaths.latest_train_run(trainer, preset)` = splat.ply 가 있는 가장 큰 번호 폴더를 쓴다.
+  - 취소: `run_all(cancel=threading.Event)` 단계 사이에서 멈추고 `runner.run` 중인 외부 프로그램을 끝냄 (GUI `POST /api/run/cancel`).
 - 실패한 단계의 출력 폴더는 `<이름>_failed_<시각>`으로 옆으로 치운다.
 
 ## 3. 좌표

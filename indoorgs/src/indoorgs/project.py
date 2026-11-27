@@ -36,6 +36,39 @@ class SectionPaths:
     @property
     def train(self) -> Path: return self.root / "train"
     def train_run(self, trainer: str, preset: str) -> Path: return self.train / f"{trainer}_{preset}"
+
+    def train_runs(self, trainer: str, preset: str) -> list[tuple[int, Path]]:
+        """있는 학습 폴더 [(번호, 경로)] 번호순. <trainer>_<preset> = 1, _2, _3 ...
+        실패(_failed_<시각>)·이전(_prev_<시각>) 폴더는 이름이 숫자로 안 끝나므로 빠짐."""
+        base = self.train_run(trainer, preset)
+        out = []
+        if self.train.is_dir():
+            for d in self.train.iterdir():
+                if not d.is_dir():
+                    continue
+                if d.name == base.name:
+                    out.append((1, d))
+                elif d.name.startswith(base.name + "_") and d.name[len(base.name) + 1:].isdigit():
+                    n = int(d.name[len(base.name) + 1:])
+                    if n >= 2:
+                        out.append((n, d))
+        return sorted(out)
+
+    def latest_train_run(self, trainer: str, preset: str) -> Path:
+        """최신 학습 폴더 (fill·merge·report·train 이 같이 씀): splat.ply 가 있는 것 중 번호가 가장 큰 것.
+        없으면 번호가 가장 큰 폴더(끝나지 않은 것), 그것도 없으면 기본 폴더 (아직 없을 수 있음)."""
+        runs = self.train_runs(trainer, preset)
+        done = [d for _, d in runs if (d / "splat.ply").exists()]
+        if done:
+            return done[-1]
+        return runs[-1][1] if runs else self.train_run(trainer, preset)
+
+    def new_train_run(self, trainer: str, preset: str) -> Path:
+        """다시 학습할 새 폴더: 기존 가장 큰 번호 + 1 (하나도 없으면 기본 폴더). 기존 폴더는 안 건드림."""
+        runs = self.train_runs(trainer, preset)
+        if not runs:
+            return self.train_run(trainer, preset)
+        return self.train / f"{trainer}_{preset}_{runs[-1][0] + 1}"
     @property
     def fill(self) -> Path: return self.root / "fill"
     @property

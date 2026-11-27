@@ -38,17 +38,25 @@ def _num(v, fmt="{:,}") -> str:
         return _e(v)
 
 
-def _train_runs(sp) -> list[dict]:
+def _run_key(d: Path):
+    """brush_default, brush_default_2, ..._10 순서 (글자순이면 _10 이 _2 앞)"""
+    head, _, tail = d.name.rpartition("_")
+    return (head, int(tail)) if head and tail.isdigit() else (d.name, 1)
+
+
+def _train_runs(sp, train_cfg=None) -> list[dict]:
+    """학습 폴더 목록. latest = fill·merge 가 쓰는 최신 폴더 (설정된 학습기·프리셋)."""
+    latest = sp.latest_train_run(train_cfg.trainer, train_cfg.preset) if train_cfg else None
     runs = []
     if sp.train.is_dir():
-        for d in sorted(sp.train.iterdir()):
+        for d in sorted(sp.train.iterdir(), key=_run_key):
             if not d.is_dir() or "_failed_" in d.name:
                 continue
             ev, stt = _read(d / "eval.json"), _read(d / "stats.json")
             if ev is None and stt is None and not (d / "splat.ply").exists():
                 continue
             runs.append({"name": d.name, "trainer": d.name.split("_")[0], "eval": ev, "stats": stt,
-                         "ply": (d / "splat.ply").exists()})
+                         "ply": (d / "splat.ply").exists(), "latest": d == latest})
     return runs
 
 
@@ -61,7 +69,7 @@ def collect(project) -> dict:
         pri = _read(sp.priors)
         path = _read(sp.path_json)
         secs.append({"name": sec.name, "video": sec.video, "frames": done, "diagnose": diag,
-                     "priors": pri, "path": path, "runs": _train_runs(sp)})
+                     "priors": pri, "path": path, "runs": _train_runs(sp, project.cfg.train)})
     plan = None
     if project.has_space:
         try:
@@ -159,7 +167,8 @@ def build_html(project) -> str:
                     trs = f'<span class="warn">{tr:.1%} · VR에서 비칠 수 있음</span>'
                 else:
                     trs = f"{tr:.1%}"
-                tail = [f"<td>{_e(r['name'])}</td>",
+                mark = " (최신·합치기에 씀)" if r.get("latest") and len(s["runs"]) > 1 else ""
+                tail = [f"<td>{_e(r['name'])}{mark}</td>",
                         f"<td>{_num(ev.get('psnr'), '{:.2f}')}</td>",
                         f"<td>{_num(st.get('count'))}</td>", f"<td>{trs}</td>"]
             rows.append("<tr>" + "".join(base + tail) + "</tr>")
@@ -222,6 +231,9 @@ class Report(Stage):
 
     def is_done(self, ctx: StageContext) -> bool:
         return False
+
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        return []          # 보고서는 매번 새로 만드는 화면 (원본 데이터 아님)
 
     def run(self, ctx: StageContext) -> StageResult:
         out = write_report(ctx.project)

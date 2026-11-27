@@ -19,6 +19,9 @@ class Prior(Stage):
     def outputs(self, ctx: StageContext) -> list[Path]:
         return [ctx.paths.priors]
 
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        return [ctx.paths.priors, ctx.paths.colmap / "priors_warnings.json"]
+
     def run(self, ctx: StageContext) -> StageResult:
         p = ctx.paths
         if not p.frames_done.exists():

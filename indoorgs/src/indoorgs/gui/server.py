@@ -8,6 +8,7 @@ API (모두 /api 아래)
   GET  sections/{name}/video        project.yaml 의 영상 (Range 지원)
   GET  status                       구간 × 단계 (done/todo/skip/running/fail)
   POST run  {section?, until?}      백그라운드로 run_all (동시에 하나만)
+  POST run/cancel                   실행 취소 (단계 사이 + 실행 중인 외부 프로그램 종료)
   GET  run/state
   GET  logs                         logs/*.log 목록
   GET  logs/{file}?n=200            꼬리 n줄
@@ -61,6 +62,7 @@ class Runner:
         self.root = root
         self.lock = threading.Lock()
         self.thread: threading.Thread | None = None
+        self.cancel_ev = threading.Event()
         self.lines: deque[str] = deque(maxlen=500)
         self.state: dict = {"running": False}
 
@@ -81,13 +83,14 @@ class Runner:
             self.state = {"running": True, "section": section, "until": until,
                           "started": dt.datetime.now().isoformat(timespec="seconds"),
                           "finished": None, "ok": None, "error": None}
+            self.cancel_ev = threading.Event()
             self.thread = threading.Thread(target=self._work, args=(project, section, until), daemon=True)
             self.thread.start()
             return dict(self.state)
 
     def _work(self, project, section, until):
         try:
-            ok = run_all(project, only_section=section, until=until, echo=self.lines.append)
+            ok = run_all(project, only_section=section, until=until, echo=self.lines.append, cancel=self.cancel_ev)
             self.state["ok"] = ok
         except Exception as e:                  # 단계 밖 오류도 화면에 보이게
             self.state["ok"] = False
@@ -98,6 +101,14 @@ class Runner:
 
     def snapshot(self) -> dict:
         return dict(self.state) | {"lines": list(self.lines)}
+
+    def cancel(self) -> dict:
+        """실행 취소 요청 (F). run_all 이 단계 사이에서 멈추고 실행 중인 외부 프로그램도 끝냄."""
+        if not self.busy():
+            raise HTTPException(409, "실행 중이 아님")
+        self.cancel_ev.set()
+        self.state["cancel_requested"] = True
+        return dict(self.state)
 
 
 def create_app(project_root: str | Path) -> FastAPI:
@@ -224,6 +235,10 @@ def create_app(project_root: str | Path) -> FastAPI:
             return runner.start(body.get("section") or None, body.get("until") or None)
         except KeyError as e:
             raise HTTPException(404, str(e).strip("'\""))
+
+    @app.post("/api/run/cancel")
+    def post_run_cancel():
+        return runner.cancel()
 
     @app.get("/api/run/state")
     def run_state():

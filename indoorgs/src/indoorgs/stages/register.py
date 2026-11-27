@@ -79,6 +79,11 @@ class Register(Stage):
     def outputs(self, ctx: StageContext) -> list[Path]:
         return [ctx.paths.data_model]
 
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        # colmap/ 통째로 옮기면 priors.json 까지 빠지므로 register 결과만. 완료 표시 파일은 db 가 없으면 run 이 지움
+        p = ctx.paths
+        return [p.db, p.sparse, p.data, p.colmap / INFO]
+
     def run(self, ctx: StageContext) -> StageResult:
         p = ctx.paths
         exe = colmap_exe(ctx)

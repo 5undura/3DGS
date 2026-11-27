@@ -10,6 +10,7 @@ indoorgs init D:/scan/student_hall      # project.yaml 만들기
 indoorgs check D:/scan/student_hall     # 도구·영상 점검
 indoorgs status D:/scan/student_hall    # 구간 × 단계 표
 indoorgs run D:/scan/student_hall [--section room_b117] [--until register]
+indoorgs run D:/scan/student_hall --rerun train   # train 부터 다시: train/<학습기>_<프리셋>_2 새 폴더, 뒤 단계 결과는 _prev_<시각> 으로 보존
 python -m pytest
 ```
 

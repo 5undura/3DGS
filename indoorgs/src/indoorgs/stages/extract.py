@@ -144,6 +144,9 @@ class Extract(Stage):
     def outputs(self, ctx: StageContext) -> list[Path]:
         return [ctx.paths.frames_done]
 
+    def prev_targets(self, ctx: StageContext) -> list[Path]:
+        return [ctx.paths.frames]
+
     def run(self, ctx: StageContext) -> StageResult:
         video = ctx.section.video
         if not Path(video).exists():
