@@ -135,6 +135,12 @@ def cmd_run(a) -> int:
     return 0 if ok else 1
 
 
+def cmd_gui(a) -> int:
+    from .gui.server import serve      # fastapi 는 gui 선택 설치 ([gui])
+    serve(a.folder, port=a.port, open_browser=a.open)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="indoorgs", description="실내 공간 원클릭 3DGS")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -144,6 +150,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("run", help="끝나지 않은 단계를 순서대로 실행")
     s.add_argument("folder"); s.add_argument("--section"); s.add_argument("--until", help="이 단계까지만")
     s.set_defaults(f=cmd_run)
+    s = sub.add_parser("gui", help="로컬 웹 화면 (127.0.0.1)"); s.add_argument("folder"); s.add_argument("--port", type=int, default=8765); s.add_argument("--open", action="store_true", help="브라우저 열기"); s.set_defaults(f=cmd_gui)
     a = ap.parse_args(argv)
     try:
         return a.f(a)
