@@ -9,7 +9,8 @@
 - [ ] 1단계 자세 확인 — **LichtFeld 없음 → 막힘** (아래 시행착오)
 - [x] 2단계 재정합 (sequential + loop, global / incremental) → global 못 씀, **incremental 이 원래보다 나음** (아래 표)
 - [x] 3단계 Brush 2560 → 1920 과 PSNR 같음 (해상도는 병목 아님)
-- [ ] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip` 진행 중 (11-27 08:40~)
+- [x] 빈 곳 채우기 (tools/fill, `up\1b_origskip` 기준) → `up\1c_fill_origskip\fill_with_backdrop.ply`. PSNR 25.75→25.51, 반투명 86.9→85.0% (바탕층 포함 79.6%). **VR/SuperSplat 에서 천장·빈 곳 눈으로 확인 필요**
+- [ ] LichtFeld pose-opt / PPISP — clang-cl 설치 대기
 
 ## 도구 확인 (2026-11-27)
 | 도구 | 버전 | train_all / register_all 옵션 대조 |
@@ -47,6 +48,10 @@
 - incremental 재정합: 25.07 / 0.862. **공통 평가 사진 32장 기준 원래 25.76 → 25.07 (나빠짐)**, 반투명 89.0%.
   COLMAP 수치(재투영·순간이동)가 좋아져도 학습 결과는 안 좋아짐 → 3D 점이 적고(54만 vs 64.5만) 매칭이 sequential 이라 사진 간 연결이 약한 탓으로 추정.
   → **원래 정합 + 순간이동 25장 제외(`up\1b_origskip`)를 기준 정합으로 확정**
+- 빈 곳 채우기 (순간이동 제외판 + tools/fill): 같은 평가 133장 25.75 → 25.51 / SSIM 0.874 → 0.871.
+  반투명 86.9 → 85.0%, 바늘형(>10배) 16.3 → 13.6%, 바탕층 합친 PLY 는 반투명 79.6%.
+  PSNR 은 학습 사진 시점만 재므로 "빈 곳"(사진에 안 찍힌 천장 등) 개선은 안 잡힘 → 약간의 하락은 보강 점이 학습을 조금 방해한 정도로 보임. 판단은 눈으로.
+  `fill_section.py` 가 한글 경로 사진을 못 읽던 버그(cv2.imread) 고침.
 - 해석: 순간이동 사진은 실제로 잘못 놓였지만 전체 PSNR 에 주는 영향은 작음 → 복도 PSNR 25 의 주원인은 다른 곳(전반적 자세 정밀도 1px, 노출 흔들림, 흰 벽) 일 가능성. LichtFeld pose-opt + PPISP 로 확인 예정
 
 ## 시행착오
@@ -67,3 +72,9 @@
 3. 같은 매칭 DB 로 incremental → 비교용 폴더. 재투영 오차·등록률·순간이동 수 비교
 4. Brush 기준선 설정(1920/300만/SH2/30,000, 평가 8장마다 1장)으로 원래 1b vs 새 정합 PSNR 비교
 5. 나은 정합으로 2560 학습 (8GB 에서 메모리 부족이면 상한 낮춤) → tools/fill 바탕층·시작점 보강
+
+## 아침 정리 (11-27 09:10)
+- 지금 가장 나은 결과: **`F:\Sample\4차\up\1c_fill_origskip\fill_with_backdrop.ply`** (원래 정합 − 순간이동 25장, Brush 기준선, 바탕층 포함). PSNR 만 보면 `up\1c_brush_origskip\export_30000.ply` (25.75) 가 최고
+- 정합을 새로 하는 것(global/incremental)은 효과 없음 → 원래 정합 유지
+- 해상도 2560 은 효과 없음 (시간만 1.5배)
+- 남은 핵심: 자세 미세 보정 + 노출 보정 (LichtFeld `--pose-opt`, `--ppisp`). **VS2022 Installer > 개별 구성 요소 > "Windows용 C++ Clang 컴파일러" 설치** 후 `F:\Sample\tools\lfs\build_lfs.bat` 다시 실행
