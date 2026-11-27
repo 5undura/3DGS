@@ -38,6 +38,8 @@ class SectionPaths:
     @property
     def planes_json(self) -> Path: return self.walls / "planes.json"
     @property
+    def textures(self) -> Path: return self.walls / "tex"
+    @property
     def data_seed(self) -> Path: return self.root / "data_seed"
     @property
     def train(self) -> Path: return self.root / "train"

@@ -97,15 +97,40 @@ class Repair(Stage):
         if not src.exists():
             return StageResult(False, f"{src} 없음 (snap 먼저)")
         planes = [wp.plane_from_json(d) for d in schemas.read_json(p.planes_json)["planes"]]
-        cams = None
+        cams, m = None, None
         mdir = source_dir(ctx) / "sparse" / "0"
         if mdir.exists():
             m = cmodel.read_model(mdir)
             cams = np.array([im.center for im in m.images.values()]) if m.images else None
-        info = repair.repair_file(src, run / REPAIR_PLY, planes, cameras=cams,
+        texture = None
+        if wc.texture:
+            texture = self._textures(ctx, planes, m)
+        info = repair.repair_file(src, run / REPAIR_PLY, planes, cameras=cams, texture=texture,
                                   min_cover=wc.repair_min_cover, max_hole_m2=wc.repair_max_hole_m2)
         schemas.write_json(run / REPAIR_JSON, {"version": schemas.VERSION, **_jsonable(info)})
-        return StageResult(True, f"메운 스플랫 {info.get('n_added', 0):,}개", self.outputs(ctx))
+        return StageResult(True, f"메운 스플랫 {info.get('n_added', 0):,}개"
+                           + (f" (면 텍스처 {len(texture)}개)" if texture else ""), self.outputs(ctx))
+
+    def _textures(self, ctx: StageContext, planes, model):
+        """walls/tex/ 에 면 텍스처가 있으면 읽고(사용자가 고친 PNG 포함), 없으면 사진으로 만들어 저장.
+        실패하면 None (repair 는 둘레 기증자 색 + 색장 보정으로 메움)."""
+        from ..walls import facetex
+        from .walls import source_dir
+        p = ctx.paths
+        try:
+            if p.textures.is_dir() and any(p.textures.glob("*.json")):
+                tex = facetex.load_textures(p.textures, planes)
+                ctx.log(f"면 텍스처 {len(tex)}개 읽음 ({p.textures})")
+                return tex or None
+            if model is None:
+                return None
+            tex = facetex.build_face_textures(planes, model, source_dir(ctx) / "images")
+            facetex.save_textures(tex, p.textures, planes)
+            ctx.log(f"면 텍스처 {len(tex)}개 만듦 -> {p.textures} (PNG 를 고치면 다음 repair 에 반영)")
+            return tex or None
+        except Exception as e:  # noqa: BLE001
+            ctx.log(f"경고: 면 텍스처 실패 {e} -> 둘레 색으로 메움")
+            return None
 
 
 def _jsonable(v):

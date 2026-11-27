@@ -26,7 +26,7 @@
 
 공개 API
   coverage_map(ply, plane, cell=.., band=..)      -> (덮임 0..1 (nv,nu), 면 안 셀 bool (nv,nu))
-  repair_faces(ply, planes, *, cell=0.05, min_cover=0.5, max_hole_m2=4.0, cameras=None, rng=0, ...)
+  repair_faces(ply, planes, *, cell=0.05, min_cover=0.5, max_hole_m2=4.0, cameras=None, rng=0, texture=None, ...)
                                                    -> (새 GaussianPly, info)
   repair_file(in_ply, out_ply, planes, **opts)    -> info   (in == out 이면 거부)
 
@@ -49,6 +49,12 @@
   부호 거리 0), DC 색 += color_smooth · (F(목표 셀) - F(기증자 셀)). F 는 면의 저주파 색장: 잘 덮인 셀의 불투명도
   가중 평균 DC 를 (중앙값 ± 3 MAD 로 자른 뒤) 가우시안 정규화 합성곱(tone_sigma) 으로 펴고, 빈 곳은 가장 가까운 값.
   같은 면 = 같은 법선이라 회전·SH 는 기증자 그대로.
+- texture (선택, {면 id: walls.facetex.FaceTexture}): 주면 새 가우시안의 DC 색은 텍스처의 그 (u, v) 색
+  (쌍선형, source > 0 인 픽셀만) 으로: f_dc = (rgb/255 - 0.5) / SH_C0. 기증자는 scale·rotation·opacity·고차 SH 만
+  줌. 텍스처가 없는 곳(source 0, 면 id 가 사전에 없음)은 위의 기증자 색 + 색장 차이 그대로.
+  texture_rest="keep"(기본): 고차 SH 는 기증자 것 (이웃과 같은 시점 의존 밝기 변화 - 텍스처는 여러 시점의 중앙값이라
+  SH 평균 0 과 맞음). "zero": 텍스처 색으로 칠한 가우시안의 f_rest 를 0 으로 (모든 방향에서 텍스처 색 그대로).
+  합성 데이터에서는 패치 차이를 잴 수 없어 (기증자 f_rest 평균 0) 기본은 keep, 실제 장면에서 비교 후 정할 것.
 - 원본 가우시안은 비트 그대로, 새 것은 뒤에 붙음. 주석(comments)도 그대로.
 """
 from __future__ import annotations
@@ -270,13 +276,14 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                  max_hole_m2: float | None = 4.0, cameras=None, rng=0, band: float = 0.06,
                  uv_margin: float = 0.05, rim_m: float = 0.25, max_donor_sigma: float = 0.25,
                  min_donors: int = 8, color_smooth: float = 1.0, tone_sigma: float = 0.3, passes: int = 6,
-                 max_view_dist: float = 12.0, max_view_deg: float = 80.0, max_cams: int = 256
+                 max_view_dist: float = 12.0, max_view_deg: float = 80.0, max_cams: int = 256,
+                 texture: dict | None = None, texture_rest: str = "keep"
                  ) -> tuple[GaussianPly, dict]:
     """면마다 덮임 < min_cover 인 셀(문 구멍 제외)을 같은 면 둘레 기증자의 통째 복사로 메운 새 PLY. 규칙은 모듈 설명.
 
     info: n_added, n_before, n_after, seconds, params, faces[id] = {hole_m2_before, hole_m2_after, cover_before,
     cover_after (면 안 셀 중 덮임 >= min_cover 비율), n_added, n_holes, n_holes_filled, skipped_large_m2,
-    unseen_m2, no_donor_m2}."""
+    unseen_m2, no_donor_m2, n_textured (texture 를 줬을 때)}."""
     from scipy import ndimage
     from scipy.spatial import cKDTree
 
@@ -284,6 +291,9 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
     plyio.check_required(ply.names)
     if not 0 < min_cover < 1:
         raise ValueError("min_cover 는 0..1 사이")
+    if texture_rest not in ("keep", "zero"):
+        raise ValueError("texture_rest 는 keep | zero")
+    rest_names = [k for k in ply.names if k.startswith("f_rest_")]
     rng = _rng(rng)
     d = ply.data
     N = len(d)
@@ -295,7 +305,8 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                   "params": {"cell": cell, "min_cover": min_cover, "max_hole_m2": max_hole_m2,
                              "cameras": None if cams is None else int(len(cams)), "band": band,
                              "rim_m": rim_m, "max_donor_sigma": max_donor_sigma, "color_smooth": color_smooth,
-                             "tone_sigma": tone_sigma, "passes": passes}}
+                             "tone_sigma": tone_sigma, "passes": passes,
+                             "texture": None if not texture else sorted(texture), "texture_rest": texture_rest}}
     new_parts: list[np.ndarray] = []
     cell_a = cell * cell
     for j, pl in enumerate(planes):
@@ -305,6 +316,9 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
               "n_added": 0, "n_holes": 0, "n_holes_filled": 0, "skipped_large_m2": 0.0, "unseen_m2": 0.0,
               "no_donor_m2": 0.0}
         info["faces"][pl.id] = fi
+        tex = texture.get(pl.id) if texture else None
+        if tex is not None:
+            fi["n_textured"] = 0
         n_in = int(inside.sum())
         if n_in == 0:
             continue
@@ -412,8 +426,20 @@ def repair_faces(ply: GaussianPly, planes: list[Plane], *, cell: float = 0.05, m
                 X = pl.point(tu, tv)
                 for ci, cn in enumerate("xyz"):
                     rows[cn] = X[:, ci]
+                use_tex = np.zeros(M, bool)
+                if tex is not None:
+                    trgb, tsrc = tex.sample(np.stack([tu, tv], 1))
+                    use_tex = tsrc > 0
+                    tdc = (trgb / 255.0 - 0.5) / plyio.SH_C0
+                    for ci in range(3):
+                        rows[f"f_dc_{ci}"][use_tex] = tdc[use_tex, ci]
+                    if texture_rest == "zero":
+                        for k in rest_names:
+                            rows[k][use_tex] = 0
+                    fi["n_textured"] += int(use_tex.sum())
                 if color_smooth:
                     shift = color_smooth * (F[ty, tx] - F[pcell_v[loc], pcell_u[loc]])
+                    shift[use_tex] = 0
                     for ci in range(3):
                         rows[f"f_dc_{ci}"] = rows[f"f_dc_{ci}"].astype(np.float64) + shift[:, ci]
                 added_face.append(rows)

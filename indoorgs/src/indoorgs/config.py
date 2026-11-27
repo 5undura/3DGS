@@ -68,6 +68,7 @@ class WallsCfg:
     repair: bool = True              # snap 뒤 면에서 비치거나 빈 칸을 둘레 스플랫 복사로 메움 -> splat_repaired.ply
     repair_min_cover: float = 0.5    # 덮임(0..1)이 이보다 낮은 칸을 메움
     repair_max_hole_m2: float = 4.0  # 이보다 큰 구멍은 안 메움 (못 본 넓은 면을 지어내지 않도록)
+    texture: bool = True             # 메울 색을 면 텍스처에서: 실제 사진 투영 > PatchMatch 메우기 (walls/tex/*.png, 고쳐도 됨)
 
 
 @dataclass
