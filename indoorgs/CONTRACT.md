@@ -133,7 +133,15 @@ register는 이걸 COLMAP DB `pose_priors` 표에 넣고 `pose_prior_mapper`를 
 {"version": 1, "count": 3000000, "translucent_ratio": 0.494, "needle_ratio": 0.013}
 ```
 
-`translucent_ratio` = 불투명도 0.5 미만 비율, `needle_ratio` = 가장 긴 축 / 가장 짧은 축 > 10 비율 (`tools/ply_stats.py`와 같은 정의).
+`translucent_ratio` = 불투명도 0.5 미만 비율, `needle_ratio` = 가장 긴 축 / **중간 축** > 10 비율 (`tools/ply_stats.py` 코드와 같은 정의. 복도 1 기록 16.3% 등도 이 기준).
+
+### colmap/register.json (register가 씀)
+
+어떤 정합 방식을 썼는지 기록: `pose_prior_mapper`(도면 좌표) / `mapper` / `global_mapper`, 전환했다면 그 이유. diagnose는 `pose_prior_mapper`일 때만 공간 검사(방 밖, 위치 제약에서 1m)를 한다. 다른 좌표에서는 의미가 없기 때문이다.
+
+### fill/fill.json (fill이 씀)
+
+바닥·천장 면의 출처(`plan.json` 또는 점에서 추정), 추가한 바탕층 수, 임계값(반경 배수 3, 덮임 기준 1.0).
 
 ## 5. 함수 모양
 

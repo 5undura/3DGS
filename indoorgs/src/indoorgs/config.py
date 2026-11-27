@@ -38,6 +38,8 @@ class RegisterCfg:
     mapper: str = "incremental"      # incremental | global  (복도 1 실험: global 은 못 씀)
     use_floorplan_prior: bool = True  # plan.json + path.json 이 있을 때만 의미 있음
     camera_model: str = "OPENCV"
+    seq_overlap: int = 20             # sequential 일 때 앞뒤 몇 장과 매칭
+    loop_detection: bool = True       # sequential 일 때 같은 곳 다시 지나면 연결 (어휘 트리 필요)
 
 
 @dataclass

@@ -40,6 +40,8 @@ CMD_VGC = "view_graph_calibrator"
 CMD_GLOBAL = "global_mapper"
 OPT_SINGLE_CAMERA = "--ImageReader.single_camera"
 OPT_CAMERA_MODEL = "--ImageReader.camera_model"
+OPT_SEQ_OVERLAP = "--SequentialMatching.overlap"
+OPT_SEQ_LOOP = "--SequentialMatching.loop_detection"   # 어휘 트리 경로 기본값 = 자동 다운로드 (TODO(PC): 오프라인이면 실패)
 # priors.json 의 sigma 를 DB 에 넣으므로 공분산을 덮어쓰지 않음 (기본값도 0 이지만 명시)
 PRIOR_MAPPER_EXTRA = ["--overwrite_priors_covariance", "0"]   # TODO(PC에서 -h로 확인): bool 을 0/1 로 받는지
 
@@ -119,7 +121,11 @@ class Register(Stage):
             if not r.ok:
                 move_aside(db)
                 return fail(f"{CMD_FEATURES} 실패 (코드 {r.code})")
-            r = colmap(f"{rc.matcher}_matcher", "--database_path", db)
+            margs = ["--database_path", db]
+            if rc.matcher == "sequential":
+                # 옵션 이름: COLMAP 4.2.1 controllers/option_manager.cc
+                margs += [OPT_SEQ_OVERLAP, str(rc.seq_overlap), OPT_SEQ_LOOP, "1" if rc.loop_detection else "0"]
+            r = colmap(f"{rc.matcher}_matcher", *margs)
             if not r.ok:
                 move_aside(db)
                 return fail(f"{rc.matcher}_matcher 실패 (코드 {r.code})")

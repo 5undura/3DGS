@@ -30,7 +30,7 @@ _PLY_TYPES = {"float": "f4", "float32": "f4", "double": "f8", "float64": "f8", "
 def read_ply_fields(path: Path, names: list[str]) -> dict[str, np.ndarray]:
     """binary_little_endian PLY 의 vertex 속성을 이름으로 읽음 (Brush 는 xyz 가 맨 뒤, LichtFeld 는 맨 앞).
     memmap 이라 300만 개도 필요한 열만 메모리에 올림.
-    TODO: C 의 plyio.py(PLY 읽기 공용)가 생기면 그걸로 교체"""
+    plyio.stats 와 같은 정의지만, plyio.read 는 전체를 올리므로 통계용으로 이 가벼운 읽기를 따로 둠"""
     with open(path, "rb") as f:
         if f.readline().strip() != b"ply":
             raise ValueError(f"PLY 아님: {path}")
