@@ -23,17 +23,18 @@ def read(path):
         raise SystemExit(f"{path}: {a.size} 값만 읽힘 (필요 {n * len(names)}). 구글 드라이브 파일이면 PC 에 내려받아졌는지 확인")
     return names, a.reshape(n, len(names)), [h for h in head if h.startswith("comment")]
 
-out, srcs = sys.argv[1], sys.argv[2:]
-names, first, comments = read(srcs[0]); parts = [first]
-for s in srcs[1:]:
-    nm, a, _ = read(s)
-    b = np.zeros((len(a), len(names)), "<f4")
-    for i, k in enumerate(names):
-        if k in nm: b[:, i] = a[:, nm.index(k)]
-    parts.append(b)
-A = np.concatenate(parts)
-with open(out, "wb") as f:
-    h = "ply\nformat binary_little_endian 1.0\n" + "".join(c + "\n" for c in comments)
-    h += "element vertex %d\n" % len(A) + "".join("property float %s\n" % k for k in names) + "end_header\n"
-    f.write(h.encode("ascii")); f.write(A.astype("<f4").tobytes())
-print(out, f"{len(A):,} splats", [len(p) for p in parts])
+if __name__ == "__main__":
+    out, srcs = sys.argv[1], sys.argv[2:]
+    names, first, comments = read(srcs[0]); parts = [first]
+    for s in srcs[1:]:
+        nm, a, _ = read(s)
+        b = np.zeros((len(a), len(names)), "<f4")
+        for i, k in enumerate(names):
+            if k in nm: b[:, i] = a[:, nm.index(k)]
+        parts.append(b)
+    A = np.concatenate(parts)
+    with open(out, "wb") as f:
+        h = "ply\nformat binary_little_endian 1.0\n" + "".join(c + "\n" for c in comments)
+        h += "element vertex %d\n" % len(A) + "".join("property float %s\n" % k for k in names) + "end_header\n"
+        f.write(h.encode("ascii")); f.write(A.astype("<f4").tobytes())
+    print(out, f"{len(A):,} splats", [len(p) for p in parts])

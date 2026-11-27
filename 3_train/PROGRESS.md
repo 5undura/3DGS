@@ -78,3 +78,11 @@
 - 정합을 새로 하는 것(global/incremental)은 효과 없음 → 원래 정합 유지
 - 해상도 2560 은 효과 없음 (시간만 1.5배)
 - 남은 핵심: 자세 미세 보정 + 노출 보정 (LichtFeld `--pose-opt`, `--ppisp`). **VS2022 Installer > 개별 구성 요소 > "Windows용 C++ Clang 컴파일러" 설치** 후 `F:\Sample\tools\lfs\build_lfs.bat` 다시 실행
+
+## 사용자 확인 (11-27 오전) → 바탕층 "뚫린 곳만"
+- 사용자 의견: `1c_brush_origskip` 은 괜찮지만 바닥 등 일부 뚫림, `fill_with_backdrop` 은 살짝 뭉개져 보임
+- 원인 분석 (바탕층 점 ↔ 학습 스플랫(불투명도>0.3) 최근접 거리): 바닥은 92% 가 5cm 안에 학습 스플랫 있음(덮임), 천장은 94% 가 비어 있음,
+  **벽 바탕층은 80% 가 실제 벽과 5cm 넘게 어긋남** → 반투명 벽 스플랫 뒤로 흐린 바탕층(1/4 크기 사진 6장 중간값 색)이 비쳐 뭉개짐
+- 새 도구 `tools/fill/merge_holes.py`: 벽 바탕층은 빼고, 바닥·천장 바탕층 중 학습 스플랫이 덮지 않은 곳(반경 4.5cm 안 불투명도 합 < 1)만 합침
+  - `up\1c_brush_origskip\holes_backdrop.ply` : 기준선(순간이동 제외) + 바탕층 3.8만 개 ← **추천 확인 대상**
+  - `up\1c_fill_origskip\fill_holes.ply` : 빈 곳 채우기 학습 + 바탕층 0.9만 개
