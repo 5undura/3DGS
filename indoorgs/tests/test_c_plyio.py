@@ -114,7 +114,8 @@ def test_transform_similarity():
     R = rot([0.3, 1, -0.2], 37)
     s = 1.7
     M = np.eye(4); M[:3, :3] = s * R; M[:3, 3] = [1, -2, 3]
-    with pytest.warns(plyio.ShNotRotatedWarning):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")               # SH 도 돌리므로 경고 없음
         q = plyio.transform(p, M)
     np.testing.assert_allclose(q.xyz, p.xyz @ (s * R).T + M[:3, 3], atol=1e-4)
     Rq0 = plyio.quat_to_mat(np.stack([p.data[f"rot_{i}"] for i in range(4)], 1).astype(float))
@@ -129,6 +130,61 @@ def test_transform_similarity():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         plyio.transform(p, T)
+
+
+def sh_coef(ply):
+    """PLY -> (N, 3, (d+1)^2) [채널, 계수] (f_rest 는 이름으로, 채널 우선)."""
+    K = (ply.sh_degree + 1) ** 2 - 1
+    d = ply.data
+    out = np.zeros((ply.n, 3, K + 1))
+    for c in range(3):
+        out[:, c, 0] = d[f"f_dc_{c}"]
+        for k in range(K):
+            out[:, c, k + 1] = d[f"f_rest_{c * K + k}"]
+    return out
+
+
+def unit(v):
+    return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+
+@pytest.mark.parametrize("deg", [1, 2, 3])
+@pytest.mark.parametrize("order", ["brush", "lichtfeld"])
+def test_sh_rotation_view_consistent(deg, order):
+    """eval(돌린 계수, R d) == eval(원래 계수, d). Brush·LichtFeld 순서 둘 다."""
+    names = plyio.brush_names(deg) if order == "brush" else plyio.lichtfeld_names(deg)
+    p = random_ply(names, 300, seed=deg)
+    rng = np.random.default_rng(10 + deg)
+    d = unit(rng.normal(size=(p.n, 3)))
+    for R in (rot([0.3, 1, -0.2], 37), rot([1, 0, 0], 90), rot([0.5, -0.4, 0.8], 171)):
+        M = np.eye(4); M[:3, :3] = 2.5 * R; M[:3, 3] = [3, -1, 2]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            q = plyio.transform(p, M)
+        assert q.names == names
+        before = plyio.eval_sh(sh_coef(p), d)
+        after = plyio.eval_sh(sh_coef(q), d @ R.T)
+        np.testing.assert_allclose(after, before, atol=1e-5)
+        # 차수마다 따로도 확인 (각 차수 회전이 직교행렬)
+        for l in range(1, deg + 1):
+            D = plyio.sh_rotation(R, l)
+            np.testing.assert_allclose(D @ D.T, np.eye(2 * l + 1), atol=1e-10)
+
+
+def test_sh_rotation_identity_and_basis():
+    p = random_ply(plyio.lichtfeld_names(3), 50)
+    T = np.eye(4); T[:3, 3] = [1, 2, 3]
+    q = plyio.transform(p, T)
+    for k in p.names:
+        if k.startswith("f_"):
+            np.testing.assert_array_equal(q.data[k], p.data[k])
+    for l in range(4):
+        np.testing.assert_allclose(plyio.sh_rotation(np.eye(3), l), np.eye(2 * l + 1), atol=1e-10)
+    # 기저가 sh_utils 와 같은지 한 점 직접 계산: d = z 축이면 차수1 은 C1*sh[2] 만
+    c = np.zeros((1, 3, 4)); c[0, :, 2] = 1
+    np.testing.assert_allclose(plyio.eval_sh(c, np.array([[0, 0, 1.0]])), [[plyio.SH_C1] * 3])
+    c = np.zeros((1, 3, 4)); c[0, :, 1] = 1                        # -C1*y
+    np.testing.assert_allclose(plyio.eval_sh(c, np.array([[0, 1.0, 0]])), [[-plyio.SH_C1] * 3])
 
 
 def test_similarity_rejects_bad():
