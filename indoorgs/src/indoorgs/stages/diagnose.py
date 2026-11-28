@@ -3,8 +3,11 @@
 - 순간이동: 저장소 tools/diagnose.py report_jumps 를 함수로. 촬영 순서(파일명의 원본 프레임 번호)대로
   이동 속도를 재서 중앙값의 5배 넘게(그리고 상위 10%) 튄 곳. 가장 빠른 15곳의 앞뒤 사진을 뺌
   (복도 1: 상위 15곳 25장 제외 -> PSNR +0.25)
-- outside_space: 공간(plan.json)이 있고 모델이 도면 좌표일 때(pose_prior_mapper 로 정합)만. 어느 방에도 없는 카메라
-- far_from_prior: priors.json 이 있고 모델이 도면 좌표일 때만. 제약 위치에서 1m 넘게 떨어진 카메라
+- outside_space: 공간(plan.json)이 있고 모델이 도면 좌표일 때(pose_prior_mapper 로 정합, 또는 register 가 제약에 직접 맞춤)만.
+  어느 방에도 없는 카메라
+- far_from_prior: priors.json 이 있고 모델이 도면 좌표일 때만. 제약 위치에서 1m 넘게 떨어진 카메라.
+  register 가 제약에 직접 맞춘(aligned) 모델이면 맞춘 뒤 좌표로 잼 (data/ 가 sparse_aligned 에서 만들어지므로).
+  COLMAP 배치 그대로면 맞는 사진도 걸림 (prior_matching RESULTS 5절)
 - excluded = 위 셋의 합집합 -> data_clean/sparse/0 (원본 data/ 는 그대로)
 
 data_clean/images 는 사진을 복사하지 않고 data/images 를 가리킴:
@@ -81,10 +84,14 @@ def link_images(src: Path, dst: Path) -> str:
 
 
 def paths_in_plan_coords(paths) -> bool:
-    """구간 모델이 도면 좌표인지 (register.json mapper == pose_prior_mapper). 모든 단계가 이 판정 하나만 씀
-    (diagnose 공간 검사, walls·snap, fill 바닥·천장, merge 배치). priors.json 이 있어도 mapper 로 바뀌었으면 아님."""
+    """구간 모델이 도면 좌표인지 (register.json mapper == pose_prior_mapper, 또는 aligned = 제약에 직접 맞춤).
+    모든 단계가 이 판정 하나만 씀 (diagnose 공간 검사, walls·snap, fill 바닥·천장, merge 배치).
+    priors.json 이 있어도 mapper 로 바뀌었고 직접 맞추지도 않았으면 아님."""
     info = paths.colmap / "register.json"
-    return info.exists() and schemas.read_json(info).get("mapper") == "pose_prior_mapper"
+    if not info.exists():
+        return False
+    d = schemas.read_json(info)
+    return bool(d.get("aligned")) or d.get("mapper") == "pose_prior_mapper"
 
 
 def model_in_plan_coords(ctx: StageContext) -> bool:

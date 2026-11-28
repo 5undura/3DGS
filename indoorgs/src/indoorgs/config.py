@@ -41,6 +41,17 @@ class RegisterCfg:
     seq_overlap: int = 20             # sequential 일 때 앞뒤 몇 장과 매칭
     loop_detection: bool = True       # sequential 일 때 같은 곳 다시 지나면 연결 (어휘 트리 필요)
     vocab_tree: str | None = None     # 어휘 트리 파일 (없으면 COLMAP 이 인터넷에서 받음, 오프라인이면 루프 검출 없이 다시)
+    # 두 번 정합 + 동선 자세로 짝 검증 (위치 제약이 있을 때만. experiments/prior_matching/RESULTS.md).
+    # 1차: 앞뒤 seq_overlap 장 짝 + pose_prior_mapper -> 후보 짝 추가(spatial, matcher=exhaustive 면 exhaustive)
+    # -> DB 사본에서 1차 자세와 안 맞는 짝 삭제 -> 2차 정합 -> 수평 맞추고 제약에 다시 맞춤. 끄면 예전 한 번 정합
+    pair_verify: bool = True
+    verify_max_distance: float = 12.0  # 후보 짝: 제약 위치 이 거리(m) 안 (6 m·80장은 부족했음, 8 m 까지는 됨)
+    verify_max_neighbors: int = 300    # 후보 짝: 사진마다 가까운 순 최대 장수 (COLMAP 은 0 을 못 받음)
+    verify_seq_keep: int = 10          # 이름 순 앞뒤 이 장수 안의 짝은 검사 안 하고 둠
+    verify_rot_tol_deg: float = 30.0   # 상대 회전이 1차 자세와 이보다 다르면 삭제
+    verify_dir_tol_deg: float = 45.0   # 이동 방향이 1차 자세와 이보다 다르면 삭제
+    verify_max_far_m: float = 1.5      # 1차에서 제약과 이보다 먼 사진은 기준에서 뺌
+    gimbal_level: bool = True          # 화면 수평 유지(짐벌) 가정으로 모델을 수평 맞춤. 손으로 기울여 찍은 영상이면 끔
 
 
 @dataclass

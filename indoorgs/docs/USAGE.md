@@ -74,6 +74,11 @@ GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있
 - 학습 후 정리(`cleanup`, snap 뒤·repair 앞)는 모든 구간에서 돎. 기본은 방 안 부유물 지우기(`floaters`)만 →
   `splat_clean.ply`, 지운 것은 `removed_clean.ply` 로 열어 확인. 다른 단계(아주 큰 스플랫 `huge`, 바늘형 쪼개기 `needles`, SH 색 튐 `sh`)는
   `project.yaml` 의 `cleanup: {steps: [floaters, huge, needles, sh]}` 처럼 넣어서 켬. 바늘 쪼개기는 스플랫 수가 늘어남 (합성 장면 바늘 11~16% 에서 +77~112%)
+- 정합(공간 + 동선이 있을 때): **두 번 정합 + 동선 자세로 짝 검증**이 기본 (`register: {pair_verify: true}`).
+  앞뒤 사진 짝만으로 1차 정합 → 동선 12 m 안의 후보 짝 추가 → 1차 자세와 안 맞는 짝(복도 양 끝이 비슷해 생기는 가짜 짝)을 DB 사본에서 지움 → 2차 정합 → 수평 맞추고 도면에 맞춤.
+  합성 복도에서 접힘·순간이동이 없어짐 (`experiments/prior_matching/RESULTS.md`). 정합 시간은 대략 두 배.
+  손으로 기울여 찍은 영상이면 `gimbal_level: false`. 예전 한 번 정합으로 돌리려면 `pair_verify: false`.
+  후보 범위: `verify_max_distance`(12 m, 매칭이 너무 오래 걸리면 8), `verify_max_neighbors`(300). 6 m·80장은 부족했음
 - 끝난 단계는 다시 안 돌림. 중간에 꺼도 다음에 이어서 실행
 - 로그는 화면 아래, 파일은 `logs\<구간>_<단계>.log`
 - 학습 시간(3060 Ti, 복도 1): Brush default 약 36분, LichtFeld default 약 1.5시간. 추출·정합은 따로

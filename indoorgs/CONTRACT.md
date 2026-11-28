@@ -39,6 +39,7 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
     frames/  frames/done.json  extract
     colmap/priors.json         prior
     colmap/db.db  colmap/sparse/<n>/   register
+    colmap/sparse_pass1/ db_verified.db sparse_aligned/0   register (위치 제약 + pair_verify 일 때: 1차, 짝 지운 DB 사본, 제약에 맞춘 모델)
     data/images  data/sparse/0         register (왜곡 보정 사진, 학습 입력)
     diagnose.json  data_clean/         diagnose
     walls/planes.json  data_seed/      walls (도면 좌표일 때만: 면 다시 맞추기 + 초기 점 심기)
@@ -125,6 +126,14 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
 
 register는 이걸 COLMAP DB `pose_priors` 표에 넣고 `pose_prior_mapper`를 돌린다. 표 스키마·옵션 이름은 설치된 COLMAP에서 `-h`로 확인해 `stages/register.py` 맨 위 주석에 적는다.
 
+`register.pair_verify`(기본 켬)이면 두 번 정합한다 (`experiments/prior_matching/RESULTS.md`, `colmap/pair_verify.py`):
+sequential(앞뒤 `seq_overlap`장, `quadratic_overlap 0`, 루프 검출 없음) → `pose_prior_mapper` → `colmap/sparse_pass1`
+→ 같은 `db.db`에 후보 짝 추가(`spatial_matcher` `verify_max_distance` 12 m·`verify_max_neighbors` 300·`ignore_z 1`, `matcher: exhaustive`면 exhaustive)
+→ `db.db`를 `db_verified.db`로 복사해 1차 자세(수평 맞춤 + 제약에 다시 맞춤)와 상대 회전 30°·이동 방향 45° 넘게 다른 짝을 `two_view_geometries`에서 삭제
+→ `db_verified.db`로 2차 `pose_prior_mapper`(실패하면 `mapper`) → 가장 큰 모델을 수평 맞추고 제약에 닮음 변환으로 맞춤 → `colmap/sparse_aligned/0` → undistort.
+`db_verified.db`에는 매처를 다시 돌리지 않는다 (지운 짝이 되살아남). 기준 자세가 사진의 절반 미만이면 1차 결과를 그대로 쓴다.
+완료 표시: `matching.done`(내용 = 방식) `pass1.done` `candidates.done` `verify.done`(통계) `mapper.done`. sequential 매칭은 항상 `quadratic_overlap 0`.
+
 ### diagnose.json (diagnose가 씀)
 
 ```json
@@ -156,7 +165,7 @@ register는 이걸 COLMAP DB `pose_priors` 표에 넣고 `pose_prior_mapper`를 
   `source_identity`(`{"n_images", "images_bin_sha1"}`, 만든 원본 모델)가 지금 `data_clean`(없으면 `data`) 모델과 같을 때만 쓴다.
 - snap·repair 는 맞춘 면(`fit`/`infer`)만 쓴다 (도면 그대로인 면은 실제 위치를 모름). 둘 다 기본 꺼짐 (`walls.snap`, `walls.repair`; repair 는 snap 필요).
   repair 는 카메라가 있으면 학습 카메라 광선 덮임(면 뒤 0.5 m 까지)으로 구멍을 다시 확인한다 (`repair.json` `faces[].covered_by_rays_m2`). `--rerun` 이 앞 단계부터면 walls·snap·repair 는 적용 안 돼도 이전 결과를 `_prev_`로 옮긴다.
-- "도면 좌표인가"는 모든 단계에서 `stages.diagnose.model_in_plan_coords` (= `register.json` mapper) 하나로 판정한다.
+- "도면 좌표인가"는 모든 단계에서 `stages.diagnose.model_in_plan_coords` (= `register.json` mapper 가 `pose_prior_mapper` 이거나 `aligned`) 하나로 판정한다.
 
 ### train/<run>/splat_walls.ply, walls.json (snap이 씀)
 
@@ -184,7 +193,17 @@ fill·merge는 `splat_repaired.ply` > `splat_clean.ply` > `splat_walls.ply` > `s
 
 ### colmap/register.json (register가 씀)
 
-어떤 정합 방식을 썼는지 기록: `pose_prior_mapper`(도면 좌표) / `mapper` / `global_mapper`, 전환했다면 그 이유. diagnose는 `pose_prior_mapper`일 때만 공간 검사(방 밖, 위치 제약에서 1m)를 한다. 다른 좌표에서는 의미가 없기 때문이다.
+어떤 정합 방식을 썼는지 기록: `pose_prior_mapper`(도면 좌표) / `mapper` / `global_mapper`, 전환했다면 그 이유. diagnose는 도면 좌표일 때만 공간 검사(방 밖, 위치 제약에서 1m)를 한다. 다른 좌표에서는 의미가 없기 때문이다.
+
+```json
+{"version": 1, "mapper": "pose_prior_mapper", "mode": "pair_verify", "matcher": "sequential", "camera_model": "OPENCV",
+ "pair_verify": {"pairs": 18059, "kept_sequential": 2358, "kept": 6756, "drop_rot": 7770, "drop_dir": 233, "drop_unknown": 942,
+                 "drop_no_pose": 0, "dropped": 8945, "ref_poses": 248, "reference": {"models": [142, 133], "poses": 248, "...": 0}},
+ "aligned": true, "align": {"scale": 1.04, "leveled_deg": 0.4, "resid_median_m": 0.28, "far_1m": 18, "transform": {}},
+ "model": "sparse_aligned/0"}
+```
+- 도면 좌표 = `mapper == "pose_prior_mapper"` 또는 `aligned == true` (`stages.diagnose.paths_in_plan_coords`). `aligned`면 data/ 가 맞춘 모델에서 나오므로 far_from_prior 도 맞춘 뒤 좌표로 잰다.
+- `pair_verify`: 검증 통계, 건너뛰었으면 `{"skipped": 이유}`, 한 번 정합(plain)이면 `null`. `model`: undistort 에 쓴 모델 (colmap/ 기준, 없으면 `sparse` 의 가장 큰 모델).
 
 ### fill/fill.json (fill이 씀)
 
