@@ -132,7 +132,7 @@ sequential(앞뒤 `seq_overlap`장, `quadratic_overlap 0`, 루프 검출 없음)
 → `db.db`를 `db_verified.db`로 복사해 1차 자세(수평 맞춤 + 제약에 다시 맞춤)와 상대 회전 30°·이동 방향 45° 넘게 다른 짝을 `two_view_geometries`에서 삭제
 → `db_verified.db`로 2차 `pose_prior_mapper`(실패하면 `mapper`) → 가장 큰 모델을 수평 맞추고 제약에 닮음 변환으로 맞춤 → `colmap/sparse_aligned/0` → undistort.
 `db_verified.db`에는 매처를 다시 돌리지 않는다 (지운 짝이 되살아남). 기준 자세가 사진의 절반 미만이면 1차 결과를 그대로 쓴다.
-완료 표시: `matching.done`(내용 = 방식) `pass1.done` `candidates.done` `verify.done`(통계) `mapper.done`. sequential 매칭은 항상 `quadratic_overlap 0`.
+완료 표시: `matching.done`(내용 = 방식) `pass1.done`(내용 = priors.json 지문, 바뀌면 매칭부터 다시) `candidates.done` `verify.done`(통계) `mapper.done`. sequential 매칭은 항상 `quadratic_overlap 0`.
 
 ### diagnose.json (diagnose가 씀)
 

@@ -68,14 +68,39 @@ def rot2qvec(R: np.ndarray) -> np.ndarray:
     return -q if q[0] < 0 else q
 
 
-def level_rotation(R_wc: np.ndarray) -> np.ndarray:
-    """짐벌 카메라(수평 유지) 가정: 카메라 오른쪽 축들과 가장 수직인 방향을 위(+z)로 돌리는 회전 Q.
-    R_wc: (N,3,3) world_from_cam. 카메라들이 여러 방향(요)을 봐야 위가 정해진다."""
+MIN_YAW_SPREAD = math.sin(math.radians(3.0)) ** 2    # 오른쪽 축들이 한 직선에서 이만큼(RMS 3°)도 안 벗어나면 요가 안 변한 것
+
+
+def up_direction(R_wc: np.ndarray, C: np.ndarray | None = None) -> tuple[np.ndarray, str]:
+    """짐벌 카메라(수평 유지) 가정으로 모델 좌표의 위 방향(단위 벡터)과 구한 방법을 돌려줌.
+    - "right_axes": 카메라 오른쪽 축들과 가장 수직인 방향. 카메라들이 여러 방향(요)을 봐야 정해진다.
+    - 요가 거의 안 변하면(한 방향으로만 걷거나 갔다가 180° 로만 돌아옴) 오른쪽 축이 한 직선에 모여 그 둘레 방향이
+      안 정해진다 (자세 잡음이 방향을 정해 버려 수십~100° 틀림). 이때는 오른쪽 축에 수직인 평면 안에서
+      "path_level": 카메라 중심들이 가장 덜 퍼진 방향 (동선은 수평) / "camera_up": 그것도 안 정해지면 카메라 위축 평균."""
     rx = R_wc[:, :, 0]
-    _, v = np.linalg.eigh(rx.T @ rx)
-    g = v[:, 0]
-    if g @ (-R_wc[:, :, 1].mean(0)) < 0:        # 위 = 카메라 아래축(y)의 반대쪽
+    up_mean = -R_wc[:, :, 1].mean(0)                # 카메라 아래축(y)의 반대쪽
+    w, v = np.linalg.eigh(rx.T @ rx)
+    g, how = v[:, 0], "right_axes"
+    if w[1] < MIN_YAW_SPREAD * len(rx):
+        B = v[:, :2]                                # 오른쪽 축에 수직인 평면
+        g, how = B @ (B.T @ up_mean), "camera_up"
+        if C is not None and len(C) >= 3:
+            e, u = np.linalg.eigh(B.T @ np.cov(np.asarray(C, float).T) @ B)
+            if e[1] > 9.0 * max(e[0], 0.0) and e[1] > 0:
+                g, how = B @ u[:, 0], "path_level"
+        n = float(np.linalg.norm(g))
+        g = g / n if n > 1e-9 else v[:, 0]
+    if g @ up_mean < 0:
         g = -g
+    return g, how
+
+
+def level_rotation(R_wc: np.ndarray, C: np.ndarray | None = None) -> np.ndarray:
+    """up_direction 이 구한 위 방향을 +z 로 돌리는 회전 Q. R_wc: (N,3,3) world_from_cam, C: (N,3) 카메라 중심(있으면)."""
+    return _rotation_to_z(up_direction(R_wc, C)[0])
+
+
+def _rotation_to_z(g: np.ndarray) -> np.ndarray:
     ax = np.cross(g, [0, 0, 1.0])
     sn, cs = float(np.linalg.norm(ax)), float(g[2])
     if sn < 1e-9:
@@ -118,12 +143,14 @@ def _prior_map(priors: dict) -> dict[str, np.ndarray]:
 
 def similarity_to_priors(R_wc: np.ndarray, C: np.ndarray, P: np.ndarray, level: bool = True):
     """수평 맞추기(level) 뒤 제약에 맞추는 닮음 변환. 돌려줌: (s, A, b, stats), 새 좌표 = s * A @ x + b. 못 맞추면 None."""
-    Q = level_rotation(R_wc) if level else np.eye(3)
+    g, how = up_direction(R_wc, C) if level else (np.array([0, 0, 1.0]), "none")
+    Q = _rotation_to_z(g)
     fit = fit_to_priors(C @ Q.T, P)
     if fit is None:
         return None
     s, Rz, b, st = fit
     st["leveled_deg"] = round(_rot_deg(Q), 3)
+    st["level_method"] = how
     return s, Rz @ Q, b, st
 
 

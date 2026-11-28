@@ -225,3 +225,45 @@ def test_load_reference_levels_fragments_and_drops_far(tmp_path):
             assert np.linalg.norm(C - Cs[k]) < 0.15, nm
             assert np.allclose(R, Rs[k].T, atol=0.02), nm
     assert ref.K[0, 0] == 500.0 and ref.dist[0] == pytest.approx(0.01)
+
+
+# ---------------------------------------------------------------- 요가 안 변하는 동선 (한 방향으로만 걷기)
+def _straight_walk(rng, n=200, roll_noise=1.0, pitch=-10.0):
+    """x 축으로 곧게 걷고 요가 ±1° 만 흔들림, 짐벌 수평 오차 roll_noise°. 돌려줌: (R_wc (N,3,3), 중심)."""
+    R = np.array([Rz(-90 + rng.uniform(-1, 1)) @ R_CW0.T @ Rx(rng.normal(pitch, 3)) @ Rz(rng.normal(0, roll_noise))
+                  for _ in range(n)])
+    C = np.column_stack([np.arange(n) * 0.1, rng.uniform(-0.3, 0.3, n), 1.4 + rng.uniform(-0.05, 0.05, n)])
+    return R, C
+
+
+def test_level_straight_walk_uses_path_not_noise():
+    """요가 거의 안 변하면 오른쪽 축만으로는 위가 안 정해짐 (자세 잡음이 방향을 정해 수십° 틀렸음) -> 동선이 수평인 방향."""
+    A = Rz(40) @ Rx(35)
+    for seed in range(10):
+        R, C = _straight_walk(np.random.default_rng(seed))
+        Rm, Cm = np.einsum("ij,njk->nik", A, R), C @ A.T
+        g, how = pv.up_direction(Rm, Cm)
+        assert how == "path_level"
+        up = pv.level_rotation(Rm, Cm) @ A @ [0, 0, 1.0]
+        assert math.degrees(math.acos(min(1.0, up[2]))) < 1.0, seed
+        # 중심을 안 주면 카메라 위축 평균: 카메라 숙임(10°)만큼만 틀림
+        g2, how2 = pv.up_direction(Rm)
+        assert how2 == "camera_up" and math.degrees(math.acos(min(1.0, g2 @ A[:, 2]))) < 15.0
+
+
+def test_align_straight_walk_model():
+    rng = np.random.default_rng(11)
+    R, C = _straight_walk(rng, n=60)
+    names = [name(i + 1) for i in range(60)]
+    truth = _model([r.T for r in R], C, names, rng)
+    dist = pv.transform_model(truth, 0.5, Rz(20) @ Rx(140), np.array([1.0, 2.0, 3.0]))    # 뒤집힌 채 놓임
+    new, st = pv.align_model_to_priors(dist, _priors(names, C))
+    assert st["level_method"] == "path_level"
+    err = [np.linalg.norm(new.images[k + 1].center - C[k]) for k in range(60)]
+    assert max(err) < 0.1 and st["far_1m"] == 0
+
+
+def test_level_method_normal_walk_is_right_axes():
+    rng = np.random.default_rng(12)
+    Rs, Cs = _corridor(rng=rng)
+    assert pv.up_direction(np.array([r.T for r in Rs]), Cs)[1] == "right_axes"

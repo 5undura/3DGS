@@ -326,3 +326,70 @@ def test_register_mode_change_rematches(tmp_path, monkeypatch):
     assert fake2.names()[:2] == ["feature_extractor", "sequential_matcher"]
     assert any(p.name.startswith("db_failed_") for p in ctx.paths.colmap.iterdir())
     assert any("매칭 방식이 바뀜" in m for m in logs)
+
+
+def test_register_pair_verify_priors_changed_restarts(tmp_path, monkeypatch):
+    """1차 정합 뒤 (후보 짝에서 실패) 동선을 고쳐 priors.json 이 바뀌면 낡은 1차 자세·DB 를 이어 쓰지 않음."""
+    root = make_project(tmp_path / "p")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    h = colmap_handlers()
+    h["spatial_matcher"] = lambda cmd: 1
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    _patch_verify(monkeypatch, names, fake)
+    assert not Register().run(ctx).ok
+    col = ctx.paths.colmap
+    assert (col / "pass1.done").read_text(encoding="utf-8").strip()
+    d = json.loads(ctx.paths.priors.read_text(encoding="utf-8"))
+    for f in d["frames"]:
+        f["xyz"][1] += 2.0
+    ctx.paths.priors.write_text(json.dumps(d), encoding="utf-8")
+    fake2 = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake2)
+    _patch_verify(monkeypatch, names, fake2)
+    assert Register().run(ctx).ok
+    assert fake2.names() == ["feature_extractor", "sequential_matcher", "pose_prior_mapper", "spatial_matcher",
+                            "pose_prior_mapper", "image_undistorter"]
+    assert any("priors.json" in m and "바뀜" in m for m in logs)
+    # 낡은 중간 결과는 지우지 않고 옆으로
+    assert any(x.name.startswith("db_failed_") for x in col.iterdir())
+    assert any(x.name.startswith("sparse_pass1_failed_") for x in col.iterdir())
+
+
+def test_register_rerun_does_not_resume_unfinished(tmp_path, monkeypatch):
+    """--rerun (예: extract 부터 다시)인데 register 가 끝나지 않은 상태였으면 낡은 DB·1차 결과를 이어 쓰지 않음."""
+    root = make_project(tmp_path / "p")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    h = colmap_handlers()
+    h["spatial_matcher"] = lambda cmd: 1
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    _patch_verify(monkeypatch, names, fake)
+    assert not Register().run(ctx).ok
+    ctx.rerun = True
+    fake2 = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake2)
+    _patch_verify(monkeypatch, names, fake2)
+    assert Register().run(ctx).ok
+    assert fake2.names()[:3] == ["feature_extractor", "sequential_matcher", "pose_prior_mapper"]
+    assert any(x.name.startswith("db_failed_") for x in ctx.paths.colmap.iterdir())
+
+
+def test_register_pair_verify_mapper_fallback_without_level_not_aligned(tmp_path, monkeypatch):
+    """2차가 일반 mapper 로 바뀌었고 gimbal_level 이 꺼져 있으면 위 방향을 모르므로 도면 좌표라고 하지 않음."""
+    root = make_project(tmp_path / "p", extra_yaml="register: {gimbal_level: false}\n")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    h = colmap_handlers()
+    ok_mapper = h["pose_prior_mapper"]
+    h["pose_prior_mapper"] = lambda cmd: 1 if arg(cmd, "--database_path").endswith("db_verified.db") else ok_mapper(cmd)
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    seen = _patch_verify(monkeypatch, names, fake)
+    assert Register().run(ctx).ok
+    info = json.loads((ctx.paths.colmap / "register.json").read_text(encoding="utf-8"))
+    assert info["mapper"] == "mapper" and info["aligned"] is False and "align_level" not in seen
+    assert not paths_in_plan_coords(ctx.paths)
+    assert arg(fake.calls[-1], "--input_path").replace("\\", "/").endswith("colmap/sparse/0")

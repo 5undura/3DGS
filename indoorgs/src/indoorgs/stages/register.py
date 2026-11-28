@@ -38,6 +38,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -76,7 +77,7 @@ OPT_SPA_IGNORE_Z = "--SpatialMatching.ignore_z"
 PRIOR_MAPPER_EXTRA = ["--overwrite_priors_covariance", "0"]
 
 MATCH_DONE = "matching.done"      # 내용: 매칭 방식 ("plain" | "pair_verify"). 방식이 바뀌면 매칭부터 다시
-PASS1_DONE = "pass1.done"
+PASS1_DONE = "pass1.done"         # 내용: 1차에 쓴 priors.json 의 지문 (바뀌면 매칭부터 다시)
 CAND_DONE = "candidates.done"
 VERIFY_DONE = "verify.done"       # 내용: 짝 검증 통계 JSON
 MAPPER_DONE = "mapper.done"
@@ -108,6 +109,11 @@ def best_model(sparse: Path) -> tuple[Path | None, int]:
 
 def _has_models(sparse: Path) -> bool:
     return best_model(sparse)[0] is not None
+
+
+def _priors_tag(path: Path) -> str:
+    """priors.json 내용의 지문. 1차 정합·후보 짝·짝 검증·2차 정합이 모두 이 제약으로 만들어짐."""
+    return hashlib.sha1(Path(path).read_bytes()).hexdigest()
 
 
 def _read_priors(path: Path) -> dict | None:
@@ -158,6 +164,18 @@ class Register(Stage):
         mk = {n: col / n for n in (MATCH_DONE, PASS1_DONE, CAND_DONE, VERIFY_DONE, MAPPER_DONE)}
         match_done, mapper_done = mk[MATCH_DONE], mk[MAPPER_DONE]
         pass1_dir, dbv, aligned_dir = col / SPARSE_PASS1, col / DB_VERIFIED, col / SPARSE_ALIGNED
+        # --rerun 으로 다시 돌리는 중이면 이어서 하지 않음 (앞 단계가 다시 돌아 사진·제약이 바뀌었을 수 있음.
+        # 끝난 결과는 run_all 이 _prev_ 로 옮겼고, 끝나지 않은 중간 결과는 아래에서 옆으로 치움)
+        if ctx.rerun and any(f.exists() for f in mk.values()):
+            ctx.log("--rerun: 끝나지 않은 이전 실행은 이어서 하지 않고 처음부터")
+            for f in mk.values():
+                f.unlink(missing_ok=True)
+        # 1차 정합 뒤에 위치 제약(priors.json)이 바뀌었으면 1차 자세·후보 짝·DB 의 제약이 모두 낡음 -> 매칭부터 다시
+        if verify and mk[PASS1_DONE].exists():
+            tag = mk[PASS1_DONE].read_text(encoding="utf-8").strip()
+            if tag and tag != _priors_tag(p.priors):
+                ctx.log("위치 제약(priors.json)이 1차 정합 뒤에 바뀜 -> 매칭부터 다시")
+                match_done.unlink(missing_ok=True)
         # 완료 표시 파일 정리: 앞 단계가 안 끝났으면 뒤 단계 표시도 무효
         if match_done.exists() and match_done.read_text(encoding="utf-8").strip() not in (
                 (mode,) if verify else ("", mode)):
@@ -307,7 +325,7 @@ class Register(Stage):
                     old = move_aside(sparse)
                     return StageResult(False, f"정합 실패: 모델 없음 (중간 결과 {old.name if old else '-'})")
                 return {"mapper": CMD_MAPPER, "pair_verify": {"skipped": "1차 정합 실패"}, "aligned": False}
-            mk[PASS1_DONE].touch()
+            mk[PASS1_DONE].write_text(_priors_tag(p.priors), encoding="utf-8")
             ctx.log(f"1차 정합 끝: {SPARSE_PASS1} 가장 큰 모델 {best_model(pass1_dir)[1]}장")
 
         # 3) 후보 짝 추가 (같은 db.db. 이미 매칭한 짝은 COLMAP 이 건너뜀)
@@ -354,6 +372,9 @@ class Register(Stage):
         best, n = best_model(src)
         out = {"mapper": used, "pair_verify": stats, "aligned": False, "model": str(best.relative_to(col).as_posix())}
         try:
+            if used != CMD_PRIOR_MAPPER and not rc.gimbal_level:
+                # 일반 mapper 결과는 좌표가 제멋대로라 위가 어디인지 모름. 수평 맞추기 없이 수직축 회전만으로는 못 맞춤
+                raise ValueError(f"{CMD_MAPPER} 결과인데 gimbal_level 이 꺼져 있어 위 방향을 모름")
             new, ast = pair_verify.align_model_to_priors(cmodel.read_model(best), priors, level=rc.gimbal_level)
             tgt = col / SPARSE_ALIGNED / "0"
             tmp = col / SPARSE_ALIGNED / "0_tmp"
