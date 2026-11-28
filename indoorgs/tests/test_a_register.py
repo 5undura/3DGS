@@ -393,3 +393,36 @@ def test_register_pair_verify_mapper_fallback_without_level_not_aligned(tmp_path
     assert info["mapper"] == "mapper" and info["aligned"] is False and "align_level" not in seen
     assert not paths_in_plan_coords(ctx.paths)
     assert arg(fake.calls[-1], "--input_path").replace("\\", "/").endswith("colmap/sparse/0")
+
+
+def test_register_pair_verify_settings_changed_reverifies(tmp_path, monkeypatch):
+    """2차 정합 전에 멈춘 뒤 짝 검증 설정을 바꾸면 옛 verify.done·db_verified.db 를 이어 쓰지 않음."""
+    root = make_project(tmp_path / "p")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    h = colmap_handlers()
+    ok_prior = h["pose_prior_mapper"]
+    calls = {"n": 0}
+
+    def prior(cmd):
+        calls["n"] += 1
+        return ok_prior(cmd) if calls["n"] == 1 else 1
+    h["pose_prior_mapper"] = prior
+    h["mapper"] = lambda cmd: 1
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    _patch_verify(monkeypatch, names, fake)
+    assert not Register().run(ctx).ok
+    col = ctx.paths.colmap
+    assert (col / "verify.done").exists() and (col / "db_verified.db").exists()
+    ctx.project.cfg.register.verify_rot_tol_deg = 20.0
+    fake2 = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake2)
+    seen = _patch_verify(monkeypatch, names, fake2)
+    assert Register().run(ctx).ok
+    assert seen["verify_kw"]["rot_tol_deg"] == 20.0
+    assert fake2.names() == ["pose_prior_mapper", "image_undistorter"]
+    assert any("짝 검증 설정" in m for m in logs)
+    assert any(x.name.startswith("db_verified_failed_") for x in col.iterdir())
+    st = json.loads((col / "verify.done").read_text(encoding="utf-8"))
+    assert st["settings"]["rot_tol_deg"] == 20.0

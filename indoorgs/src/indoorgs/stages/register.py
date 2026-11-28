@@ -116,6 +116,18 @@ def _priors_tag(path: Path) -> str:
     return hashlib.sha1(Path(path).read_bytes()).hexdigest()
 
 
+
+def _cand_tag(rc) -> str:
+    """후보 짝 단계 설정 지문 (바뀌면 후보 짝을 다시 찾아야 함)."""
+    return f"{rc.matcher}|{rc.verify_max_distance}|{rc.verify_max_neighbors}"
+
+
+def _verify_settings(rc) -> dict:
+    """짝 검증 설정 (verify.done 에 같이 적어 두고, 바뀌면 검증부터 다시)."""
+    return {"seq_keep": rc.verify_seq_keep, "rot_tol_deg": rc.verify_rot_tol_deg,
+            "dir_tol_deg": rc.verify_dir_tol_deg, "max_far_m": rc.verify_max_far_m,
+            "gimbal_level": rc.gimbal_level}
+
 def _read_priors(path: Path) -> dict | None:
     try:
         d = schemas.read_json(path)
@@ -176,6 +188,20 @@ class Register(Stage):
             if tag and tag != _priors_tag(p.priors):
                 ctx.log("위치 제약(priors.json)이 1차 정합 뒤에 바뀜 -> 매칭부터 다시")
                 match_done.unlink(missing_ok=True)
+        # 후보 짝·짝 검증 설정이 바뀌었으면 그 단계부터 다시 (끝난 register 는 mapper.done 으로 건너뜀)
+        if verify and not mapper_done.exists():
+            if mk[CAND_DONE].exists() and mk[CAND_DONE].read_text(encoding="utf-8").strip() not in (
+                    "", _cand_tag(rc)):
+                ctx.log("후보 짝 설정이 바뀜 -> 후보 짝부터 다시 (db.db 는 매칭부터 다시)")
+                match_done.unlink(missing_ok=True)
+            if mk[VERIFY_DONE].exists():
+                try:
+                    old_set = json.loads(mk[VERIFY_DONE].read_text(encoding="utf-8")).get("settings")
+                except ValueError:
+                    old_set = None
+                if old_set is not None and old_set != _verify_settings(rc):
+                    ctx.log("짝 검증 설정이 바뀜 -> 짝 검증부터 다시")
+                    mk[VERIFY_DONE].unlink()
         # 완료 표시 파일 정리: 앞 단계가 안 끝났으면 뒤 단계 표시도 무효
         if match_done.exists() and match_done.read_text(encoding="utf-8").strip() not in (
                 (mode,) if verify else ("", mode)):
@@ -337,11 +363,12 @@ class Register(Stage):
                            OPT_SPA_MAX_NN, str(rc.verify_max_neighbors), OPT_SPA_IGNORE_Z, "1")
             if not r.ok:
                 return StageResult(False, f"후보 짝 매칭 실패 (코드 {r.code}). 다시 실행하면 이어서 함")
-            mk[CAND_DONE].touch()
+            mk[CAND_DONE].write_text(_cand_tag(rc), encoding="utf-8")
 
         # 4) 사본에서 짝 검증
         if not mk[VERIFY_DONE].exists():
             stats = self._verify(ctx, priors, len(frames))
+            stats["settings"] = _verify_settings(rc)
             mk[VERIFY_DONE].write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
         try:
             stats = json.loads(mk[VERIFY_DONE].read_text(encoding="utf-8"))
