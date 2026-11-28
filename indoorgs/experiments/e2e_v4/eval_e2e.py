@@ -72,6 +72,8 @@ def pose_metrics(m: cm.Model, gt: dict, pri: dict) -> dict:
     es = np.linalg.norm(s * C @ R.T + t - Cg, axis=1)      # 모델 안에서 맞게 놓였나
     D = mean_rotation(np.einsum("nij,nkj->nik", Rm, Rg))   # 정답 세계 -> 모델 세계 (평균)
     up = D @ np.array([0, 0, 1.0])
+    # 회전 오차: 전체 회전(D)을 뺀 뒤 사진마다 정답과의 각도
+    rerr = np.degrees([math.acos(max(-1.0, min(1.0, (np.trace((D @ b).T @ a) - 1) / 2))) for a, b in zip(Rm, Rg)])
     P = np.array([pri.get(n, [np.nan] * 3) for n in names], float)
     dp = np.linalg.norm(C - P, axis=1)
     return {"registered": len(ims), "plan_bad05": int((e > 0.5).sum()), "plan_bad1": int((e > 1.0).sum()),
@@ -83,7 +85,8 @@ def pose_metrics(m: cm.Model, gt: dict, pri: dict) -> dict:
             "far_prior_1m": int((dp > 1.0).sum()), "far_prior_1_5m": int((dp > 1.5).sum()),
             "far_prior_1m_truly_bad": int(((dp > 1.0) & (e > 1.0)).sum()),
             "far_prior_1_5m_truly_bad": int(((dp > 1.5) & (e > 1.0)).sum()),
-            "scale_vs_gt": float(s)}
+            "scale_vs_gt": float(s), "rot_median_deg": float(np.median(rerr)), "rot_p90_deg": float(np.percentile(rerr, 90)),
+            "rot_max_deg": float(rerr.max()), "rot_bad5": int((rerr > 5).sum())}
 
 
 def step_times(tool_log: Path) -> list[tuple[str, float, datetime]]:
@@ -151,11 +154,17 @@ def evaluate(scene: Path, work: Path) -> dict:
         if c in ("spatial_matcher", "exhaustive_matcher") and i + 1 < len(st):
             out["verify_seconds"] = (st[i + 1][2] - t0).total_seconds() - s
     out["pairs_db"] = false_pairs(col / "db.db", gt, K, px)
-    if (col / "db_verified.db").exists():
-        out["pairs_verified"] = false_pairs(col / "db_verified.db", gt, K, px)
-    dj = schemas.read_json(sec / "diagnose.json")
-    out["diagnose"] = {k: (len(v) if isinstance(v, list) else v) for k, v in dj.items()
-                       if k in ("registered", "teleports", "outside_space", "far_from_prior", "excluded")}
+    for nm, key in (("db_verified.db", "pairs_verified"), ("db_anchored.db", "pairs_anchored")):
+        if (col / nm).exists():
+            out[key] = false_pairs(col / nm, gt, K, px)
+    an = (reg.get("anchored") or {})
+    if an:
+        out["anchored_python_s"] = an.get("python_seconds")
+    out["diagnose"] = {}
+    if (sec / "diagnose.json").exists():
+        dj = schemas.read_json(sec / "diagnose.json")
+        out["diagnose"] = {k: (len(v) if isinstance(v, list) else v) for k, v in dj.items()
+                           if k in ("registered", "teleports", "outside_space", "far_from_prior", "excluded")}
     if (sec / "walls" / "planes.json").exists():
         out["walls"], out["seed"] = walls_metrics(sec, gtp)
         out["clean_model"] = pose_metrics(cm.read_model(sec / "data_clean" / "sparse" / "0"), gt, pri)
@@ -168,14 +177,15 @@ def fmt(out: dict) -> str:
     r = out["register"]
     L.append(f"mapper {r.get('mapper')}, aligned {r.get('aligned')}, model {r.get('model')}, "
              f"sparse 모델 {out['sparse_models']}, 1차 모델 {out.get('pass1_models')}")
-    L.append(f"짝 (가짜): db.db {out['pairs_db']}, db_verified {out.get('pairs_verified')}")
-    L.append("| 모델 | 등록 | 도면 >0.5/>1 m | 도면 중앙 m | Sim3 >0.5/>1 | 순간이동 | 위 기울기° | x축 둘레° | y축 둘레° | 축척 | 제약 >1 m (진짜 틀림) | >1.5 m (진짜) |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append(f"짝 (가짜): db.db {out['pairs_db']}, db_verified {out.get('pairs_verified')}, "
+             f"db_anchored {out.get('pairs_anchored')}, anchored 파이썬 초 {out.get('anchored_python_s')}")
+    L.append("| 모델 | 등록 | 도면 >0.5/>1 m | 도면 중앙 m | Sim3 >0.5/>1 | 순간이동 | 회전 중앙/최대° | 위 기울기° | x축 둘레° | y축 둘레° | 축척 | 제약 >1 m (진짜 틀림) | >1.5 m (진짜) |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for k in ("raw_colmap", "final", "clean_model"):
         if k in out:
             p = out[k]
             L.append(f"| {k} | {p['registered']} | {p['plan_bad05']}/{p['plan_bad1']} | {p['plan_median_m']:.2f} | "
-                     f"{p['sim3_bad05']}/{p['sim3_bad1']} | {p['teleports']} | {p['tilt_up_deg']:.2f} | "
+                     f"{p['sim3_bad05']}/{p['sim3_bad1']} | {p['teleports']} | {p['rot_median_deg']:.2f}/{p['rot_max_deg']:.1f} | {p['tilt_up_deg']:.2f} | "
                      f"{p['roll_about_x_deg']:.2f} | {p['pitch_about_y_deg']:.2f} | {p['scale_vs_gt']:.3f} | "
                      f"{p['far_prior_1m']} ({p['far_prior_1m_truly_bad']}) | {p['far_prior_1_5m']} ({p['far_prior_1_5m_truly_bad']}) |")
     L.append(f"단계 시간: {[(c, round(s)) for c, s in out['steps']]}, 검증 {out.get('verify_seconds', 0):.0f}s")

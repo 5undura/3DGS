@@ -2,6 +2,7 @@
 
   python run_e2e.py <v4 장면 폴더> <작업 폴더> --venv <pycolmap venv> [--pair-verify 1|0] [--seed 0]
                     [--pass1-stride N] [--pass2-mapper incremental|global] [--until 단계] [--rerun 단계]
+                    [--register '{"mode": "anchored", ...}'] [--path path_good.json]  (register 설정 덧씌우기, 동선 파일)
 
 작업 폴더에 프로젝트를 만듦: project.yaml, floorplan/plan.json(줄자 오차 흉내), sections/v4/{frames, path.json}.
 frames 는 장면 images/ 를 가리키는 심볼릭 링크 (원본 그대로).
@@ -31,7 +32,8 @@ PLAN = {"version": 1, "units": "m",
 
 
 def make(scene: Path, work: Path, venv: Path, pair_verify: bool, seed: int, matcher: str,
-         pass1_stride: int = 1, pass2_mapper: str = "incremental") -> Project:
+         pass1_stride: int = 1, pass2_mapper: str = "incremental", register_extra: dict | None = None,
+         path_name: str = "path_good.json") -> Project:
     work.mkdir(parents=True, exist_ok=True)
     shim = work / "colmap"
     shim.write_text(f"#!/bin/sh\nSHIM_SEED={seed} exec {venv}/bin/python {HERE / 'colmap_shim.py'} \"$@\"\n")
@@ -40,7 +42,7 @@ def make(scene: Path, work: Path, venv: Path, pair_verify: bool, seed: int, matc
         "sections": [{"name": "v4", "video": str(work / "none.mp4")}],
         "tools": {"colmap": str(shim)},
         "register": {"pair_verify": pair_verify, "matcher": matcher, "pass1_stride": pass1_stride,
-                     "pass2_mapper": pass2_mapper},
+                     "pass2_mapper": pass2_mapper, **(register_extra or {})},
         "walls": {"enabled": True, "seed": True},
     }, indent=1))
     (work / "floorplan").mkdir(exist_ok=True)
@@ -54,7 +56,7 @@ def make(scene: Path, work: Path, venv: Path, pair_verify: bool, seed: int, matc
         n = len(list(fr.glob("f_*.jpg")))
         schemas.write_json(fr / "done.json", {"version": 1, "video": "synthetic v4", "fps": 30.0,
                                               "total_frames": 1561, "count": n})
-    (sec / "path.json").write_text((scene / "priors" / "path_good.json").read_text())
+    (sec / "path.json").write_text((scene / "priors" / path_name).read_text())
     return Project(work)
 
 
@@ -70,9 +72,11 @@ def main():
     ap.add_argument("--rerun", default=None)
     ap.add_argument("--pass1-stride", type=int, default=1)
     ap.add_argument("--pass2-mapper", default="incremental")
+    ap.add_argument("--register", default="{}", help="register 설정 덧씌우기 (JSON)")
+    ap.add_argument("--path", default="path_good.json", help="장면 priors/ 안 동선 파일")
     a = ap.parse_args()
     pj = make(a.scene.resolve(), a.work.resolve(), a.venv.resolve(), bool(a.pair_verify), a.seed, a.matcher,
-              a.pass1_stride, a.pass2_mapper)
+              a.pass1_stride, a.pass2_mapper, json.loads(a.register), a.path)
     t0 = time.time()
     ok = run_all(pj, until=a.until, rerun=a.rerun)
     print(f"run_all ok={ok} {time.time() - t0:.0f}s", flush=True)

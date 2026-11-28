@@ -38,10 +38,24 @@ COMMANDS = {
                         "--SpatialMatching.ignore_z": _bool},
     "exhaustive_matcher": dict(DB),
     # --Mapper.image_list_path: option_manager.cc AddMapperOptions (mapper·pose_prior_mapper 둘 다 부름)
-    "mapper": {**DB, "--image_path": str, "--output_path": str, "--input_path": str, "--Mapper.image_list_path": str},
+    # --Mapper.ba_use_gpu, --Mapper.fix_existing_frames: option_manager.cc AddMapperOptions
+    "mapper": {**DB, "--image_path": str, "--output_path": str, "--input_path": str, "--Mapper.image_list_path": str,
+               "--Mapper.ba_use_gpu": _bool, "--Mapper.fix_existing_frames": _bool},
     "pose_prior_mapper": {**DB, "--image_path": str, "--output_path": str, "--input_path": str,
                           "--overwrite_priors_covariance": _bool, "--use_robust_loss_on_prior_position": _bool,
-                          "--prior_position_loss_scale": float, "--Mapper.image_list_path": str},
+                          "--prior_position_loss_scale": float, "--Mapper.image_list_path": str,
+                          "--Mapper.ba_use_gpu": _bool, "--Mapper.fix_existing_frames": _bool},
+    # 동선 고정 정합 (register.mode anchored). 출처: exe/feature.cc RunMatchesImporter (AddDatabaseOptions,
+    # match_list_path 필수, match_type {pairs,raw,inliers}), exe/sfm.cc RunPointTriangulator (DB, Image, input_path,
+    # output_path, clear_points, refine_intrinsics, AddMapperOptions), RunBundleAdjuster (input_path, output_path,
+    # AddBundleAdjustmentOptions), exe/image.cc RunImageRegistrator (DB, input_path, output_path, AddMapperOptions;
+    # --image_path 없음). shim 은 register.py 가 쓰는 것만
+    "matches_importer": {**DB, "--match_list_path": str, "--match_type": str},
+    "point_triangulator": {**DB, "--image_path": str, "--input_path": str, "--output_path": str,
+                           "--clear_points": _bool, "--refine_intrinsics": _bool, "--Mapper.ba_use_gpu": _bool},
+    "bundle_adjuster": {"--input_path": str, "--output_path": str, "--BundleAdjustmentCeres.max_num_iterations": int,
+                        "--BundleAdjustmentCeres.use_gpu": _bool},
+    "image_registrator": {**DB, "--input_path": str, "--output_path": str},
     # exe/sfm.cc RunViewGraphCalibrator (AddDatabaseOptions + 선택 옵션), RunGlobalMapper (AddDatabaseOptions,
     # AddImageOptions, output_path, AddGlobalMapperOptions). register.py 가 쓰는 것만
     "view_graph_calibrator": dict(DB),
@@ -57,6 +71,10 @@ REQUIRED = {
     "image_undistorter": ["--image_path", "--input_path", "--output_path"],
     "view_graph_calibrator": ["--database_path"],
     "global_mapper": ["--database_path", "--image_path", "--output_path"],
+    "matches_importer": ["--database_path", "--match_list_path"],
+    "point_triangulator": ["--database_path", "--image_path", "--input_path", "--output_path"],
+    "bundle_adjuster": ["--input_path", "--output_path"],
+    "image_registrator": ["--database_path", "--input_path", "--output_path"],
 }
 
 
@@ -135,6 +153,10 @@ def main(argv: list[str]) -> int:
         if "--Mapper.image_list_path" in o:
             mp.image_names = _read_lines(o["--Mapper.image_list_path"])
             print(f"SHIM image_names {len(mp.image_names)}", flush=True)
+        if "--Mapper.ba_use_gpu" in o:
+            mp.ba_use_gpu = o["--Mapper.ba_use_gpu"]             # pycolmap CPU 빌드: 경고 후 CPU
+        if "--Mapper.fix_existing_frames" in o:
+            mp.fix_existing_frames = o["--Mapper.fix_existing_frames"]
         if cmd == "pose_prior_mapper":
             if o.get("--overwrite_priors_covariance"):
                 print("shim: overwrite_priors_covariance 1 은 흉내 안 함", file=sys.stderr)
@@ -171,6 +193,54 @@ def main(argv: list[str]) -> int:
         if not recs:
             print(f"SHIM {cmd} {time.time() - t0:.1f}s", flush=True)
             return 1
+    elif cmd == "matches_importer":
+        if o.get("--match_type", "pairs") != "pairs":
+            print("shim: match_type pairs 만 흉내", file=sys.stderr)
+            return 1
+        po = pycolmap.ImportedPairingOptions()
+        po.match_list_path = o["--match_list_path"]
+        pycolmap.match_image_pairs(o["--database_path"], matching_options=mo, pairing_options=po, device=cpu)
+    elif cmd in ("point_triangulator", "bundle_adjuster", "image_registrator"):
+        inp, out = Path(o["--input_path"]), Path(o["--output_path"])
+        if not inp.is_dir() or not out.is_dir():         # COLMAP: 둘 다 있는 폴더여야 함
+            print(f"input_path/output_path 없음: {inp} {out}", file=sys.stderr)
+            return 1
+        rec = pycolmap.Reconstruction(str(inp))
+        if cmd == "point_triangulator":
+            mp = pycolmap.IncrementalPipelineOptions()
+            mp.num_threads = THREADS
+            if "--Mapper.ba_use_gpu" in o:
+                mp.ba_use_gpu = o["--Mapper.ba_use_gpu"]
+            rec = pycolmap.triangulate_points(rec, o["--database_path"], o["--image_path"], out,
+                                              o.get("--clear_points", True), mp, o.get("--refine_intrinsics", False))
+            print(f"SHIM points {rec.num_points3D()}", flush=True)
+        elif cmd == "bundle_adjuster":
+            bo = pycolmap.BundleAdjustmentOptions()
+            if "--BundleAdjustmentCeres.max_num_iterations" in o:
+                bo.ceres.solver_options.max_num_iterations = o["--BundleAdjustmentCeres.max_num_iterations"]
+            if "--BundleAdjustmentCeres.use_gpu" in o:
+                bo.ceres.use_gpu = o["--BundleAdjustmentCeres.use_gpu"]
+            bo.ceres.solver_options.num_threads = THREADS
+            pycolmap.bundle_adjustment(rec, bo)
+            rec.write(str(out))
+        else:
+            # exe/image.cc RunImageRegistrator 그대로: DatabaseCache(load_all_images) -> 자세 없는 사진마다 RegisterNextImage
+            mp = pycolmap.IncrementalPipelineOptions()
+            co = pycolmap.DatabaseCacheOptions()
+            co.min_num_matches = mp.min_num_matches
+            co.ignore_watermarks = mp.ignore_watermarks
+            co.load_all_images = True
+            cache = pycolmap.DatabaseCache.create(pycolmap.Database.open(o["--database_path"]), co)
+            mapper = pycolmap.IncrementalMapper(cache)
+            mapper.begin_reconstruction(rec)
+            mopt = mp.get_mapper()
+            n0 = rec.num_reg_images()
+            for iid in sorted(rec.images):
+                if not rec.images[iid].has_pose:
+                    mapper.register_next_image(mopt, iid)
+            mapper.end_reconstruction(False)
+            rec.write(str(out))
+            print(f"SHIM registered {n0} -> {rec.num_reg_images()}", flush=True)
     elif cmd == "image_undistorter":
         pycolmap.undistort_images(o["--output_path"], o["--input_path"], o["--image_path"],
                                   output_type=o.get("--output_type", "COLMAP"), num_threads=THREADS)

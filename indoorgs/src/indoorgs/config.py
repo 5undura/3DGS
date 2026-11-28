@@ -55,6 +55,22 @@ class RegisterCfg:
     # 속도 (experiments/e2e_v4/SPEED.md). 1차는 짝 검증용 기준 자세만 있으면 되므로 N장마다만 정합하고 사이는 보간 가능
     pass1_stride: int = 3              # 1차 pose_prior_mapper 를 N장마다 (1 = 모두, 예전). 사이 사진은 같은 모델 안 앞뒤로 보간(간격 2N 이하만)
     pass2_mapper: str = "incremental"  # incremental | global (실험용·위험: 2차를 global_mapper 로, 빠르지만 seed 따라 접힘)
+    # 동선 고정 정합 (실험용, experiments/anchored/RESULTS.md, colmap/anchored.py). 위치 제약이 있을 때만.
+    # two_pass = 위 흐름 그대로 (기본). anchored = 동선 위치 + 동선 방향(요) + 짐벌 수평으로 자세를 먼저 정하고
+    # 동선 근처 짝만 매칭 -> 자세 고정 삼각측량 -> 마무리(anchored_finish). incremental SfM 을 안 씀
+    mode: str = "two_pass"             # two_pass | anchored
+    anchored_max_dist_m: float = 6.0   # 짝 후보: 동선 위치 수평 거리 이 안 (앞뒤 seq_overlap 장은 sequential 로 이미 매칭)
+    anchored_max_yaw_deg: float = 60.0  # 짝 후보: 요(보는 방향) 차이 이 안
+    anchored_pairs_per_image: int = 30  # 짝 후보: 사진마다 가까운 순 최대
+    anchored_verify_rot_deg: float = 10.0  # 삼각측량 전 DB 사본에서 상대 회전이 그래프 회전과 이보다 다른 짝 삭제 (0 = 안 함)
+    anchored_min_obs: int = 30         # 삼각측량 뒤 3D 점 관측이 이보다 적은 사진은 빼고 마무리에서 다시 등록
+    anchored_finish: str = "prior_mapper"  # prior_mapper (pose_prior_mapper --input_path: 나머지 등록 + 제약 BA) | ba | windowed | none
+    anchored_ba_rounds: int = 2        # finish=ba: bundle_adjuster -> 다시 삼각측량 을 몇 번
+    anchored_ba_iters: int = 100       # finish=ba/windowed: bundle_adjuster 반복 수 (BundleAdjustmentCeres.max_num_iterations)
+    anchored_window: int = 40          # finish=windowed: 창 크기 (사진 수, 반씩 겹침)
+    anchored_max_points_per_image: int = 0  # 마무리 전 사진마다 트랙 긴 점만 이만큼 남김 (0 = 안 줄임)
+    anchored_focal: float | None = None  # 초점거리 px (없으면 F 행렬들로 추정)
+    ba_use_gpu: bool = False           # anchored 의 BA 를 Ceres GPU 로 (--Mapper.ba_use_gpu / --BundleAdjustmentCeres.use_gpu). TODO(PC): CUDA 빌드에서만
 
 
 @dataclass
@@ -137,6 +153,8 @@ _ENUMS = {
     ("register", "matcher"): {"sequential", "exhaustive"},
     ("register", "mapper"): {"incremental", "global"},
     ("register", "pass2_mapper"): {"incremental", "global"},
+    ("register", "mode"): {"two_pass", "anchored"},
+    ("register", "anchored_finish"): {"prior_mapper", "ba", "windowed", "none"},
     ("train", "trainer"): {"brush", "lichtfeld"},
 }
 

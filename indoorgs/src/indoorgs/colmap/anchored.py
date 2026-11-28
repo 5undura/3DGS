@@ -599,3 +599,165 @@ def pose_error_stats(R_wc: np.ndarray, C: np.ndarray, use: np.ndarray, rels: lis
         deg[r.i] += 1
         deg[r.j] += 1
     return {"used": int(use.sum()), "isolated": int((deg == 0).sum())}
+
+
+# ---------------------------------------------------------------- 전체 묶음 (stages/register.py 가 부름)
+@dataclass
+class GraphParams:
+    focal: float | None = None          # 초점거리 px (None = F 행렬로 추정, 실패하면 DB 카메라 값)
+    seq_graph: int = 5                  # 자세 그래프: 순서 차 이 이하 짝은 모두
+    extra_per_image: int = 5            # 그 밖 짝은 사진마다 inlier 많은 순 이만큼
+    min_inliers: int = 30
+    sigma_yaw_deg: float = 30.0         # 동선 요 약한 제약 (v4 합성 영상은 진행 방향에서 ±40° 까지 흔들림)
+    max_shift_m: float = 3.0            # 자세 그래프 위치가 동선에서 이보다 멀면 초기 모델에서 뺌 (순간이동 방지)
+
+
+def route_order(priors: dict, names: list[str] | None = None, fps: float = 30.0):
+    """priors.json -> (사진 이름 순서, P (n,3), t (n,), sigma (n,3)). 순서 = 이름 순 (= 시간 순, extract 의 f_<번호>).
+    names 를 주면 그 안에 있는 사진만. t 가 없으면 번호/fps."""
+    fr = {f["image"]: f for f in priors.get("frames", [])}
+    order = sorted(n for n in fr if names is None or n in set(names))
+    P = np.array([fr[n]["xyz"] for n in order], float).reshape(-1, 3)
+    T = np.array([float(fr[n].get("t", k / fps)) for k, n in enumerate(order)])
+    S = np.array([fr[n].get("sigma", [1.0, 1.0, 1.0]) for n in order], float).reshape(-1, 3)
+    S = np.maximum(S, 1e-3)
+    return order, P, T, S
+
+
+def _focal_from_db(dbd: DbData, order: list[str], lo_gap: int = 3, hi_gap: int = 10):
+    idx = {n: k for k, n in enumerate(order)}
+    id2k = {iid: idx[nm] for iid, nm in dbd.names.items() if nm in idx}
+    Fs = [g["F"] for (a, b), g in dbd.geoms.items()
+          if a in id2k and b in id2k and lo_gap <= abs(id2k[a] - id2k[b]) <= hi_gap and g["config"] in (2, 3)]
+    _, _, w, h, _ = dbd.camera
+    return estimate_focal(Fs, int(w), int(h))
+
+
+def solve_graph(db: Path, priors: dict, names: list[str] | None = None, prm: GraphParams | None = None) -> dict:
+    """DB 의 검증된 짝(two_view_geometries) + 동선 -> 사진별 초기 자세 (점 없음, 자세 그래프만).
+    돌려줌 dict: order, R (n,3,3 world_from_cam), C (n,3), use (n,) bool, focal, K, dist, heading(route_headings),
+    rels(쓴 변), stats(JSON 가능)."""
+    import time
+    prm = prm or GraphParams()
+    t0 = time.time()
+    order, P, T, S = route_order(priors, names)
+    n = len(order)
+    if n < 3:
+        raise ValueError(f"동선 위치가 있는 사진이 {n}장 (3장 이상 필요)")
+    head = route_headings(P, T)
+    dbd = read_db(db)
+    focal, finfo = (prm.focal, {"given": True}) if prm.focal else _focal_from_db(dbd, order)
+    K, dist = camera_K(dbd, focal)
+    rels = collect_relposes(dbd, order, K, dist, seq_graph=prm.seq_graph, extra_per_image=prm.extra_per_image,
+                            min_inliers=prm.min_inliers)
+    if not rels:
+        raise ValueError("자세 그래프 변이 없음 (매칭 결과 확인)")
+    t1 = time.time()
+    R, conn, used, rst = solve_rotations(n, rels, head["yaw"], head["flag"], seq_graph=prm.seq_graph,
+                                         sigma_yaw_deg=prm.sigma_yaw_deg)
+    t2 = time.time()
+    C, tst = translation_averaging(R, used, P, S)
+    shift = np.linalg.norm(C - P, axis=1)
+    far = conn & (shift > prm.max_shift_m)
+    use = conn & ~far
+    flag = np.asarray(head["flag"], bool)
+    yaw_dev = np.degrees(np.abs(_wrap(np.array([R_yaw(r) for r in R]) - head["yaw"])))
+    st = {"frames": n, "focal": None if focal is None else round(float(focal), 2), "focal_info": finfo,
+          "relposes": len(rels), "relposes_with_direction": int(sum(r.d is not None for r in rels)),
+          "rotation": rst, "translation": tst, "connected": int(conn.sum()), "used": int(use.sum()),
+          "dropped_far": int(far.sum()), "route_flagged": int(flag.sum()),
+          "route_flag_reasons": {k: int(sum(1 for r in head["reason"] if r == k)) for k in ("stop", "turn", "near")},
+          "yaw_off_route_median_deg": round(float(np.median(yaw_dev[conn])), 2) if conn.any() else None,
+          "yaw_off_route_p90_deg": round(float(np.percentile(yaw_dev[conn], 90)), 2) if conn.any() else None,
+          "seconds": {"relposes": round(t1 - t0, 2), "rotations": round(t2 - t1, 2),
+                      "translations": round(time.time() - t2, 2)}}
+    return {"order": order, "R": R, "C": C, "use": use, "focal": focal, "K": K, "dist": dist, "heading": head,
+            "rels": used, "dbd": dbd, "stats": st}
+
+
+def graph_yaw(g: dict) -> np.ndarray:
+    """짝 고르기용 요: 연결된 사진은 회전 평균 값, 아니면 동선 요."""
+    yaw = np.array(g["heading"]["yaw"], float).copy()
+    for i in np.flatnonzero(g["use"]):
+        yaw[i] = R_yaw(g["R"][i])
+    return yaw
+
+
+def reference_from_graph(g: dict):
+    """pair_verify.verify_pairs 에 넘길 기준 자세 (회전만 믿을 만함 -> 방향 검사는 끄고 쓸 것)."""
+    from .pair_verify import Reference
+    poses = {nm: (g["R"][k], g["C"][k]) for k, nm in enumerate(g["order"]) if g["use"][k]}
+    return Reference(poses, g["K"], g["dist"], {"poses": len(poses), "source": "anchored"})
+
+
+def observation_counts(m: cmodel.Model) -> dict[str, int]:
+    return {im.name: int((np.asarray(im.pid) >= 0).sum()) for im in m.images.values()}
+
+
+def weak_images(m: cmodel.Model, min_obs: int) -> set[str]:
+    """3D 점 관측이 min_obs 미만인 사진 이름 (자세가 점으로 확인 안 됨 -> 빼고 나중에 다시 등록)."""
+    return {nm for nm, c in observation_counts(m).items() if c < min_obs}
+
+
+# ---------------------------------------------------------------- 창(window) BA (BA 속도 실험 a)
+def windows(order: list[str], size: int, step: int | None = None) -> list[tuple[list[str], list[str]]]:
+    """영상 순서로 겹치는 창 [(창 사진들, 이 창에서 가져올 가운데 사진들)]. 가운데 = 창 앞뒤 (size-step)/2 를 뺀 부분
+    (첫 창은 앞, 마지막 창은 뒤 끝까지). 모든 사진이 정확히 한 창의 가운데에 들어감."""
+    n = len(order)
+    if n == 0:
+        return []
+    size = max(2, min(size, n))
+    step = max(1, min(step or size // 2, size))
+    starts = list(range(0, max(1, n - size + 1), step))
+    if starts[-1] + size < n:
+        starts.append(n - size)
+    ends = [s0 + size for s0 in starts]
+    bounds = [0] + [(starts[w + 1] + ends[w]) // 2 for w in range(len(starts) - 1)] + [n]
+    out = [(order[s0:e0], order[bounds[w]:bounds[w + 1]]) for w, (s0, e0) in enumerate(zip(starts, ends))]
+    return out
+
+
+def submodel(m: cmodel.Model, names: set[str]) -> cmodel.Model:
+    """names 사진만 남긴 모델 (점은 남은 사진 2장 이상이 본 것만)."""
+    return cmodel.remove_images(m, {im.name for im in m.images.values() if im.name not in names})[0]
+
+
+def _umeyama(src: np.ndarray, dst: np.ndarray):
+    mu_s, mu_d = src.mean(0), dst.mean(0)
+    xs, xd = src - mu_s, dst - mu_d
+    U, S, Vt = np.linalg.svd(xd.T @ xs / len(src))
+    D = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        D[2, 2] = -1
+    A = U @ D @ Vt
+    var = xs.var(0).sum()
+    s = float(np.trace(np.diag(S) @ D) / var) if var > 1e-12 else 1.0
+    return s, A, mu_d - s * A @ mu_s
+
+
+def merge_windows(base: cmodel.Model, results: list[tuple[list[str], cmodel.Model]]) -> tuple[cmodel.Model, dict]:
+    """창마다 BA 한 모델을 그 창의 입력 자세(base)에 닮음 변환으로 맞춘 뒤 가운데 사진 자세만 base 에 넣음 (점은 버림 ->
+    point_triangulator 로 다시). results: [(가운데 사진들, BA 한 창 모델)]."""
+    from .pair_verify import transform_model
+    byname = {im.name: im for im in base.images.values()}
+    images = {iid: cmodel.Image(im.id, im.q, im.t, im.camera_id, im.name) for iid, im in base.images.items()}
+    moved = []
+    for core, wm in results:
+        common = [im.name for im in wm.images.values() if im.name in byname]
+        if len(common) < 3:
+            continue
+        src = np.array([next(i for i in wm.images.values() if i.name == nm).center for nm in common])
+        dst = np.array([byname[nm].center for nm in common])
+        s, A, b = _umeyama(src, dst)
+        wt = transform_model(cmodel.Model(wm.cameras, wm.images, {}, None, None), s, A, b)
+        for im in wt.images.values():
+            if im.name in core:
+                old = byname[im.name]
+                images[old.id] = cmodel.Image(old.id, im.q, im.t, old.camera_id, old.name)
+                moved.append(float(np.linalg.norm(im.center - old.center)))
+    st = {"windows": len(results), "moved_median_m": round(float(np.median(moved)), 3) if moved else None,
+          "moved_max_m": round(float(np.max(moved)), 3) if moved else None}
+    cams = {cid: c for cid, c in base.cameras.items()}
+    if results:                                  # 카메라(초점거리·왜곡)는 가운데 창 BA 값
+        cams = dict(results[len(results) // 2][1].cameras)
+    return cmodel.Model(cams, images, {}), st

@@ -22,6 +22,18 @@
   register.pass2_mapper global (실험용: v4 에서 seed 따라 크게 접힘): 5) 를 db_verified.db 사본(db_global.db)에 view_graph_calibrator -> global_mapper.
     global_mapper 는 위치 제약을 안 씀 (명령줄 옵션 없음, 4.2.1 sfm/global_mapper.cc 는 끝에 Normalize) -> 좌표가 제멋대로라
     6) 수평 맞추기(gimbal_level) + 제약에 다시 맞춤이 꼭 필요. 실패하면 pose_prior_mapper -> mapper 로.
+동선 고정 정합 register.mode: anchored (실험용, experiments/anchored/RESULTS.md, colmap/anchored.py). 위치 제약이 있을 때만:
+  1) feature_extractor -> sequential_matcher (위와 같음)                                  (matching.done = "anchored")
+  2) 앞뒤 짝만으로 회전 -> 요. 동선 위치 거리 anchored_max_dist_m·요 차이 anchored_max_yaw_deg 안 짝 목록
+     -> colmap/anchored_pairs.txt -> matches_importer --match_type pairs                    (candidates.done)
+  3) 자세 그래프 (점 없음): 상대 회전 평균 + 짐벌 수평 + 약한 동선 요, 이동 방향 + 동선 위치 -> colmap/anchored/init
+     db.db -> db_anchored.db 사본에서 그래프 회전과 안 맞는 짝 삭제 (anchored_verify_rot_deg)
+  4) point_triangulator (자세 고정) -> 관측 적은 사진 빼기 -> 마무리 anchored_finish:
+     prior_mapper = pose_prior_mapper --input_path (나머지 사진 등록 + 위치 제약 전역 BA, 기본)
+     ba = (bundle_adjuster -> point_triangulator) x anchored_ba_rounds -> image_registrator -> point_triangulator
+     windowed = 영상 순서 창마다 bundle_adjuster (창 입력 자세에 닮음 맞춤) -> point_triangulator -> image_registrator -> ...
+     none = image_registrator -> point_triangulator
+     -> colmap/sparse/0 -> 6) 과 같이 수평·제약 맞춤 -> sparse_aligned/0 -> image_undistorter  (mapper.done)
 
 확인한 버전·출처 (2026-11-27)
 - COLMAP 4.2.1 (태그 4.2.1, 커밋 bd1fcf6 = 사용자 PC 버전과 같음) 소스 github.com/colmap/colmap
@@ -53,10 +65,11 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from pathlib import Path
 
 from .. import schemas
-from ..colmap import database, model as cmodel, pair_verify, runner
+from ..colmap import anchored, database, model as cmodel, pair_verify, runner
 from ..colmap.runner import move_aside
 from .base import Stage, StageContext, StageResult
 
@@ -83,6 +96,15 @@ OPT_SEQ_VOCAB = "--SequentialMatching.vocab_tree_path"
 OPT_SPA_MAX_DIST = "--SpatialMatching.max_distance"
 OPT_SPA_MAX_NN = "--SpatialMatching.max_num_neighbors"
 OPT_SPA_IGNORE_Z = "--SpatialMatching.ignore_z"
+CMD_MATCHES_IMPORTER = "matches_importer"       # TODO(PC에서 -h로 확인): 4.2.1 exe/feature.cc RunMatchesImporter
+OPT_MATCH_LIST = "--match_list_path"            # 필수. 줄마다 '이름1 이름2' (controllers/pairing.cc ReadImagePairsText)
+OPT_MATCH_TYPE = "--match_type"                 # {pairs, raw, inliers}. pairs = 짝만 주고 매칭·기하 검증은 COLMAP
+CMD_TRIANGULATOR = "point_triangulator"         # TODO(PC): exe/sfm.cc RunPointTriangulator. 자세 고정(fix_existing_frames) + 점만 BA
+CMD_BA = "bundle_adjuster"                      # TODO(PC): exe/sfm.cc RunBundleAdjuster (--input_path --output_path + BundleAdjustment*)
+CMD_REGISTRATOR = "image_registrator"           # TODO(PC): exe/image.cc RunImageRegistrator (--database_path --input_path --output_path + Mapper.*, --image_path 없음)
+OPT_BA_ITERS = "--BundleAdjustmentCeres.max_num_iterations"   # option_manager.cc AddBundleAdjustmentOptions
+OPT_BA_GPU = "--BundleAdjustmentCeres.use_gpu"                 # TODO(PC): CUDA 빌드여야 함 (아니면 CPU 로 경고 후 계속, bundle_adjustment_ceres.cc)
+OPT_MAPPER_GPU = "--Mapper.ba_use_gpu"                         # option_manager.cc AddMapperOptions
 OPT_MAPPER_IMAGE_LIST = "--Mapper.image_list_path"   # TODO(PC에서 pose_prior_mapper -h 로 확인): 4.2.1 소스로만 확인
 # priors.json 의 sigma 를 DB 에 넣으므로 공분산을 덮어쓰지 않음 (기본값도 false 이지만 명시).
 # exe/sfm.cc: bool overwrite_priors_covariance 를 AddDefaultOption 으로 등록 -> boost program_options 의 bool 값이라
@@ -100,6 +122,9 @@ SPARSE_PASS1 = "sparse_pass1"
 SPARSE_ALIGNED = "sparse_aligned"
 DB_GLOBAL = "db_global.db"
 PASS1_LIST = "pass1_images.txt"
+ANCH_DIR = "anchored"            # 동선 고정 정합 중간 결과 (init, tri, kept, ...)
+ANCH_PAIRS = "anchored_pairs.txt"
+DB_ANCHORED = "db_anchored.db"
 MIN_REF_FRAC = 0.5          # 기준 자세가 사진의 이 비율 미만이면 검증 안 하고 1차 결과를 씀
 
 
@@ -148,6 +173,19 @@ def _verify_settings(rc) -> dict:
     return d
 
 
+def _anch_cand_tag(rc) -> str:
+    """동선 고정 정합의 짝 후보 설정 지문 (바뀌면 db.db 매칭부터 다시: 짝이 이미 DB 에 들어감)."""
+    return f"anchored|{rc.seq_overlap}|{rc.anchored_max_dist_m}|{rc.anchored_max_yaw_deg}|{rc.anchored_pairs_per_image}"
+
+
+def _anch_settings(rc) -> dict:
+    """짝 후보 뒤 단계 설정 (register.json 에 적고, 바뀌면 그 뒤만 다시)."""
+    return {k: getattr(rc, k) for k in ("anchored_verify_rot_deg", "anchored_min_obs", "anchored_finish",
+                                        "anchored_ba_rounds", "anchored_ba_iters", "anchored_window",
+                                        "anchored_max_points_per_image", "anchored_focal", "ba_use_gpu",
+                                        "gimbal_level")}
+
+
 def _pass1_tag(path: Path, rc) -> str:
     """pass1.done 내용: priors.json 지문 (+ 1차 설정, 기본이면 안 붙임 -> 예전 pass1.done 과 같음)."""
     t = _priors_tag(path)
@@ -183,11 +221,15 @@ class Register(Stage):
         p = ctx.paths
         c = p.colmap
         return [p.db, p.sparse, p.data, c / INFO, c / SPARSE_PASS1, c / DB_VERIFIED, c / SPARSE_ALIGNED,
-                c / DB_GLOBAL, c / PASS1_LIST]
+                c / DB_GLOBAL, c / PASS1_LIST, c / ANCH_DIR, c / ANCH_PAIRS, c / DB_ANCHORED]
 
     def verify_mode(self, ctx: StageContext) -> bool:
         rc, p = ctx.project.cfg.register, ctx.paths
         return bool(rc.pair_verify and rc.use_floorplan_prior and p.priors.exists() and _read_priors(p.priors))
+
+    def anchored_mode(self, ctx: StageContext) -> bool:
+        rc, p = ctx.project.cfg.register, ctx.paths
+        return bool(rc.mode == "anchored" and rc.use_floorplan_prior and p.priors.exists() and _read_priors(p.priors))
 
     def run(self, ctx: StageContext) -> StageResult:
         p = ctx.paths
@@ -203,8 +245,11 @@ class Register(Stage):
         col, db, sparse, data = p.colmap, p.db, p.sparse, p.data
         col.mkdir(parents=True, exist_ok=True)
         tool_log = ctx.project.logs / f"{ctx.section.name}_register_colmap.log"
-        verify = self.verify_mode(ctx)
-        mode = "pair_verify" if verify else "plain"
+        anch = self.anchored_mode(ctx)
+        if rc.mode == "anchored" and not anch:
+            ctx.log("경고: register.mode anchored 는 위치 제약(priors.json)이 있어야 함 -> 기본 흐름으로")
+        verify = self.verify_mode(ctx) and not anch
+        mode = "anchored" if anch else "pair_verify" if verify else "plain"
 
         def colmap(*args) -> runner.ToolResult:
             ctx.log(f"COLMAP {args[0]}")
@@ -233,6 +278,9 @@ class Register(Stage):
                 else:
                     ctx.log(f"1차 설정(pass1_stride {rc.pass1_stride})이 바뀜 -> 1차부터 다시")
                     mk[PASS1_DONE].unlink()
+        if anch and mk[CAND_DONE].exists() and mk[CAND_DONE].read_text(encoding="utf-8").strip() != _anch_cand_tag(rc):
+            ctx.log("동선 짝 후보 설정이 바뀜 -> 매칭부터 다시 (짝이 이미 db.db 에 들어감)")
+            match_done.unlink(missing_ok=True)
         # 후보 짝·짝 검증 설정이 바뀌었으면 그 단계부터 다시 (끝난 register 는 mapper.done 으로 건너뜀)
         if verify and not mapper_done.exists():
             if mk[CAND_DONE].exists() and mk[CAND_DONE].read_text(encoding="utf-8").strip() not in (
@@ -249,7 +297,7 @@ class Register(Stage):
                     mk[VERIFY_DONE].unlink()
         # 완료 표시 파일 정리: 앞 단계가 안 끝났으면 뒤 단계 표시도 무효
         if match_done.exists() and match_done.read_text(encoding="utf-8").strip() not in (
-                (mode,) if verify else ("", mode)):
+                (mode,) if (verify or anch) else ("", mode)):
             ctx.log(f"매칭 방식이 바뀜 (-> {mode}) -> 매칭부터 다시")
             match_done.unlink()
         if not db.exists():
@@ -258,7 +306,7 @@ class Register(Stage):
             for f in mk.values():
                 f.unlink(missing_ok=True)
         # pair_verify 중간 단계: 앞 단계가 안 끝났으면 뒤 단계 표시도 무효
-        steps = [MATCH_DONE, PASS1_DONE, CAND_DONE, VERIFY_DONE]
+        steps = [MATCH_DONE, CAND_DONE] if anch else [MATCH_DONE, PASS1_DONE, CAND_DONE, VERIFY_DONE]
         for a, b in zip(steps, steps[1:]):
             if not mk[a].exists():
                 mk[b].unlink(missing_ok=True)
@@ -272,6 +320,9 @@ class Register(Stage):
                 schemas.read_json(info_path).get("pass2_mapper", "incremental") != rc.pass2_mapper:
             ctx.log(f"2차 정합 방식이 바뀜 (-> {rc.pass2_mapper}) -> 2차 정합부터 다시")
             mapper_done.unlink()
+        if anch and mapper_done.exists() and schemas.read_json(info_path).get("anchored_settings") != _anch_settings(rc):
+            ctx.log("동선 고정 정합 설정이 바뀜 -> 자세 그래프부터 다시 (매칭은 그대로)")
+            mapper_done.unlink()
         # 표시 파일 없이 남은 결과 = 끊긴 실행 -> 옆으로 치움 (삭제 안 함)
         if db.exists() and not match_done.exists():
             ctx.log(f"끝나지 않은 db.db -> {move_aside(db).name}")
@@ -281,6 +332,9 @@ class Register(Stage):
             ctx.log(f"끝나지 않은 {DB_VERIFIED} -> {move_aside(dbv).name}")
         if verify and (col / DB_GLOBAL).exists() and not mapper_done.exists():
             ctx.log(f"끝나지 않은 {DB_GLOBAL} -> {move_aside(col / DB_GLOBAL).name}")
+        for nm in (ANCH_DIR, DB_ANCHORED):
+            if anch and (col / nm).exists() and not mapper_done.exists():
+                ctx.log(f"끝나지 않은 {nm} -> {move_aside(col / nm).name}")
         if sparse.exists() and not mapper_done.exists():
             ctx.log(f"끝나지 않은 sparse -> {move_aside(sparse).name}")
         if aligned_dir.exists() and not mapper_done.exists():
@@ -298,8 +352,8 @@ class Register(Stage):
             if not r.ok:
                 move_aside(db)
                 return fail(f"{CMD_FEATURES} 실패 (코드 {r.code})")
-            matcher = "sequential" if verify else rc.matcher
-            loop = matcher == "sequential" and rc.loop_detection and not verify
+            matcher = "sequential" if (verify or anch) else rc.matcher
+            loop = matcher == "sequential" and rc.loop_detection and not (verify or anch)
 
             def seq_args(lp: bool) -> list:
                 # 옵션 이름: COLMAP 4.2.1 controllers/option_manager.cc
@@ -325,7 +379,12 @@ class Register(Stage):
         if mapper_done.exists():
             info = schemas.read_json(col / INFO) if (col / INFO).exists() else {}
         else:
-            if verify:
+            if anch:
+                res = self._map_anchored(ctx, colmap, mk, frames)
+                if isinstance(res, StageResult):
+                    return fail(res.message)
+                info = res
+            elif verify:
                 res = self._map_verified(ctx, colmap, mk, frames)
                 if isinstance(res, StageResult):
                     return fail(res.message)
@@ -476,6 +535,12 @@ class Register(Stage):
         best, n = best_model(src)
         out = {"mapper": used, "pair_verify": stats, "aligned": False, "model": str(best.relative_to(col).as_posix()),
                "pass1_stride": rc.pass1_stride, "pass2_mapper": rc.pass2_mapper}
+        return self._align(ctx, best, priors, used, out)
+
+    def _align(self, ctx, best: Path, priors: dict, used: str, out: dict) -> dict:
+        """best 모델을 수평 맞추고 제약에 다시 맞춰 sparse_aligned/0 에 씀. out 에 결과를 더해 돌려줌 (실패하면 그대로)."""
+        p, rc = ctx.paths, ctx.project.cfg.register
+        col = p.colmap
         try:
             if used != CMD_PRIOR_MAPPER and not rc.gimbal_level:
                 # 일반 mapper·global_mapper 결과는 좌표가 제멋대로라 위가 어디인지 모름. 수평 맞추기 없이 수직축 회전만으로는 못 맞춤
@@ -493,6 +558,156 @@ class Register(Stage):
             ctx.log(f"경고: 제약에 직접 맞추기 실패 {e} -> {best.relative_to(col)} 그대로 씀"
                     + (f" (중간 결과 {old.name})" if old else ""))
         return out
+
+    # ---------------------------------------------------------------- 동선 고정 정합 (실험용)
+    def _map_anchored(self, ctx, colmap, mk: dict, frames: list) -> dict | StageResult:
+        """register.mode anchored 의 2)~4) + 수평·제약 맞춤. 돌려줌: register.json 에 넣을 dict, 실패하면 StageResult(False)."""
+        p, rc = ctx.paths, ctx.project.cfg.register
+        col, db, sparse = p.colmap, p.db, p.sparse
+        priors = _read_priors(p.priors)
+        names = [f.name for f in frames]
+        prm = anchored.GraphParams(focal=rc.anchored_focal)
+        secs: dict[str, float] = {}
+        gpu_m = [OPT_MAPPER_GPU, "1"] if rc.ba_use_gpu else []
+        gpu_b = [OPT_BA_GPU, "1"] if rc.ba_use_gpu else []
+        try:
+            n_pri, _ = database.write_pose_priors(db, priors)      # pose_prior_mapper 마무리용 (다른 마무리는 안 씀)
+        except Exception as e:  # noqa: BLE001
+            n_pri = 0
+            ctx.log(f"경고: 위치 제약 쓰기 실패 {e}")
+
+        # 2) 동선 근처 짝 후보 -> matches_importer
+        pst: dict = {}
+        if not mk[CAND_DONE].exists():
+            t0 = time.time()
+            order, P, _, _ = anchored.route_order(priors, names)
+            try:
+                g0 = anchored.solve_graph(db, priors, names, prm)
+                yaw, src = anchored.graph_yaw(g0), "graph"
+            except Exception as e:  # noqa: BLE001
+                ctx.log(f"경고: 앞뒤 짝만으로 회전 못 구함 {e} -> 동선 진행 방향을 요로")
+                yaw, src = anchored.route_headings(P, anchored.route_order(priors, names)[2])["yaw"], "route"
+            pairs = [(i, j) for i, j in anchored.select_pairs(P, yaw, seq_window=rc.seq_overlap,
+                                                                 max_dist_m=rc.anchored_max_dist_m,
+                                                                 max_yaw_deg=rc.anchored_max_yaw_deg,
+                                                                 max_per_image=rc.anchored_pairs_per_image)
+                     if j - i > rc.seq_overlap]                 # 앞뒤 seq_overlap 장은 sequential 이 이미 매칭
+            anchored.write_pairs_file(col / ANCH_PAIRS, order, pairs)
+            secs["pairs_select"] = round(time.time() - t0, 2)
+            pst = {"pairs": len(pairs), "yaw_source": src}
+            ctx.log(f"동선 짝 후보 {len(pairs)}개 ({ANCH_PAIRS}, 요 {src})")
+            if pairs:
+                r = colmap(CMD_MATCHES_IMPORTER, "--database_path", db, OPT_MATCH_LIST, col / ANCH_PAIRS,
+                           OPT_MATCH_TYPE, "pairs")
+                if not r.ok:
+                    return StageResult(False, f"{CMD_MATCHES_IMPORTER} 실패 (코드 {r.code}). 다시 실행하면 이어서 함")
+            mk[CAND_DONE].write_text(_anch_cand_tag(rc), encoding="utf-8")
+
+        # 3) 자세 그래프 -> 초기 모델, 짝 정리
+        work = col / ANCH_DIR
+        if work.exists():
+            move_aside(work)
+        work.mkdir(parents=True)
+        t0 = time.time()
+        try:
+            g = anchored.solve_graph(db, priors, names, prm)
+        except Exception as e:  # noqa: BLE001
+            return StageResult(False, f"동선 고정 정합: 자세 그래프 실패 {e}")
+        secs["graph"] = round(time.time() - t0, 2)
+        gst = g["stats"]
+        ctx.log(f"자세 그래프: {gst['used']}/{gst['frames']}장 (연결 {gst['connected']}, 동선에서 먼 것 {gst['dropped_far']}), "
+                f"초점 {gst['focal']}, 상대 회전 잔차 중앙 {gst['rotation'].get('rel_res_median_deg')}°, "
+                f"동선 표시(멈춤·급회전) {gst['route_flagged']}장")
+        dbx = col / DB_ANCHORED
+        if dbx.exists():
+            move_aside(dbx)
+        shutil.copy2(db, dbx)
+        vst = None
+        if rc.anchored_verify_rot_deg > 0:
+            t0 = time.time()
+            vst = pair_verify.verify_pairs(dbx, anchored.reference_from_graph(g), seq_keep=prm.seq_graph,
+                                           rot_tol_deg=rc.anchored_verify_rot_deg, dir_tol_deg=180.0,
+                                           drop_unknown=False)
+            secs["pair_check"] = round(time.time() - t0, 2)
+            ctx.log(f"짝 정리: {vst['pairs']}개 중 {vst['dropped']}개 삭제 (회전 {vst['drop_rot']}, 자세 못 구함 {vst['drop_no_pose']})")
+        init = anchored.initial_model(g["dbd"], g["order"], g["R"], g["C"], g["use"], g["focal"])
+        if len(init.images) < 2:
+            return StageResult(False, f"동선 고정 정합: 초기 자세 {len(init.images)}장")
+        cmodel.write_model(init, work / "init")
+
+        def tri(src: Path, dst: Path) -> bool:
+            dst.mkdir(parents=True, exist_ok=True)
+            r = colmap(CMD_TRIANGULATOR, "--database_path", dbx, "--image_path", p.frames, "--input_path", src,
+                       "--output_path", dst, *gpu_m)
+            return r.ok and (dst / "images.bin").exists()
+
+        def ba(src: Path, dst: Path) -> bool:
+            dst.mkdir(parents=True, exist_ok=True)
+            r = colmap(CMD_BA, "--input_path", src, "--output_path", dst, OPT_BA_ITERS, str(rc.anchored_ba_iters), *gpu_b)
+            return r.ok and (dst / "images.bin").exists()
+
+        def register_rest(src: Path, dst: Path) -> bool:
+            reg = work / "registered"
+            reg.mkdir(parents=True, exist_ok=True)
+            r = colmap(CMD_REGISTRATOR, "--database_path", dbx, "--input_path", src, "--output_path", reg)
+            return r.ok and (reg / "images.bin").exists() and tri(reg, dst)
+
+        if not tri(work / "init", work / "tri"):
+            return StageResult(False, f"{CMD_TRIANGULATOR} 실패 (초기 자세 {len(init.images)}장)")
+        m = cmodel.read_model(work / "tri")
+        weak = anchored.weak_images(m, rc.anchored_min_obs)
+        m, _ = cmodel.remove_images(m, weak)
+        thin = None
+        if rc.anchored_max_points_per_image > 0:
+            m, thin = anchored.thin_points(m, rc.anchored_max_points_per_image)
+        cmodel.write_model(m, work / "kept")
+        ctx.log(f"자세 고정 삼각측량: 점 {len(m.points)}개, 관측 {rc.anchored_min_obs} 미만 사진 {len(weak)}장 뺌"
+                + (f", 점 줄임 {thin}" if thin else ""))
+
+        # 4) 마무리
+        fin, out0 = rc.anchored_finish, sparse / "0"
+        sparse.mkdir(parents=True, exist_ok=True)
+        ok, wst = False, None
+        if fin == "prior_mapper":
+            if not n_pri:
+                return StageResult(False, "동선 고정 정합: 위치 제약을 DB 에 못 써서 pose_prior_mapper 마무리 불가")
+            out0.mkdir(parents=True, exist_ok=True)
+            r = colmap(CMD_PRIOR_MAPPER, "--database_path", dbx, "--image_path", p.frames, "--input_path", work / "kept",
+                       "--output_path", out0, *PRIOR_MAPPER_EXTRA, *gpu_m)
+            ok = r.ok and (out0 / "images.bin").exists()
+        else:
+            cur = work / "kept"
+            if fin == "ba":
+                for k in range(max(1, rc.anchored_ba_rounds)):
+                    if not ba(cur, work / f"ba{k}") or not tri(work / f"ba{k}", work / f"ba{k}_tri"):
+                        return StageResult(False, f"{CMD_BA}/{CMD_TRIANGULATOR} 실패 ({k + 1}번째)")
+                    cur = work / f"ba{k}_tri"
+            elif fin == "windowed":
+                base = cmodel.read_model(cur)
+                ordn = sorted(im.name for im in base.images.values())
+                res = []
+                for w, (win, core) in enumerate(anchored.windows(ordn, rc.anchored_window)):
+                    wd = work / "win" / f"{w:03d}"
+                    cmodel.write_model(anchored.submodel(base, set(win)), wd / "in")
+                    if not ba(wd / "in", wd / "out"):
+                        return StageResult(False, f"{CMD_BA} 실패 (창 {w})")
+                    res.append((core, cmodel.read_model(wd / "out")))
+                merged, wst = anchored.merge_windows(base, res)
+                cmodel.write_model(merged, work / "win_merged")
+                if not tri(work / "win_merged", work / "win_tri"):
+                    return StageResult(False, f"{CMD_TRIANGULATOR} 실패 (창 BA 뒤)")
+                cur = work / "win_tri"
+            ok = register_rest(cur, out0)
+        if not ok:
+            old = move_aside(sparse)
+            return StageResult(False, f"동선 고정 정합 마무리({fin}) 실패 (중간 결과 {old.name if old else '-'})")
+        used = CMD_PRIOR_MAPPER if fin == "prior_mapper" else "anchored"
+        st = {"graph": gst, "pairs": pst or None, "pair_check": vst, "weak_removed": len(weak), "thin": thin,
+              "windows": wst, "python_seconds": secs}
+        schemas.write_json(work / "anchored.json", st)
+        out = {"mapper": used, "pair_verify": None, "aligned": False, "model": f"{p.sparse.name}/0",
+               "anchored": st, "anchored_finish": fin, "anchored_settings": _anch_settings(rc)}
+        return self._align(ctx, out0, priors, used, out)
 
     def _verify(self, ctx, priors: dict, names: list[str]) -> dict:
         """load_reference + db_verified.db 복사 + verify_pairs. 못 하면 {"skipped": 이유, ...}.
