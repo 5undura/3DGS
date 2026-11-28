@@ -18,6 +18,10 @@
   (코드: `stages/register.py` `CMD_PRIOR_MAPPER`, `PRIOR_MAPPER_EXTRA`)
 - [ ] `& $C sequential_matcher -h | Select-String loop_detection` → `--SequentialMatching.loop_detection` 있음. 처음 실행 때 어휘 트리를 자동으로 받는지, **오프라인에서는 실패하는지** (실패하면 `register: {loop_detection: false}` 안내가 맞는지)
   (코드: `stages/register.py` `OPT_SEQ_LOOP`)
+- [ ] (anchored 실험 쓸 때만) `& $C matches_importer -h` → `--match_list_path`, `--match_type`; `& $C point_triangulator -h` → `--input_path --output_path --clear_points`;
+  `& $C bundle_adjuster -h` → `--BundleAdjustmentCeres.max_num_iterations`, `--BundleAdjustmentCeres.use_gpu`; `& $C image_registrator -h` → `--input_path --output_path` (`--image_path` 없음);
+  `& $C pose_prior_mapper -h | Select-String ba_use_gpu` → `--Mapper.ba_use_gpu`. 점 없는 초기 모델(frames.bin·rigs.bin 없이)을 point_triangulator 가 읽는지
+  (코드: `stages/register.py` `CMD_MATCHES_IMPORTER` ~ `OPT_MAPPER_GPU`, `experiments/anchored/RESULTS.md`)
 - [ ] 공간+동선 있는 구간의 pose_prior_mapper 결과가 **도면 좌표**로 나오는지: `sections\<s>\colmap\sparse\0` 의 카메라 위치를 report.html 도면 위 점으로 보고 동선과 겹치는지 (기대: 어긋남 1m 이내)
 
 ## 2. 진단·학습 입력 (A, C)

@@ -181,7 +181,7 @@ def _anch_cand_tag(rc) -> str:
 def _anch_settings(rc) -> dict:
     """짝 후보 뒤 단계 설정 (register.json 에 적고, 바뀌면 그 뒤만 다시)."""
     return {k: getattr(rc, k) for k in ("anchored_verify_rot_deg", "anchored_min_obs", "anchored_finish",
-                                        "anchored_ba_rounds", "anchored_ba_iters", "anchored_window",
+                                        "anchored_prior_sigma_scale", "anchored_ba_rounds", "anchored_ba_iters", "anchored_window",
                                         "anchored_max_points_per_image", "anchored_focal", "ba_use_gpu",
                                         "gimbal_level")}
 
@@ -622,6 +622,13 @@ class Register(Stage):
         if dbx.exists():
             move_aside(dbx)
         shutil.copy2(db, dbx)
+        if rc.anchored_finish == "prior_mapper" and n_pri and rc.anchored_prior_sigma_scale != 1:
+            # 그래프·삼각측량으로 이미 동선 근처라 제약은 흐름(drift)만 막으면 됨. 원래 sigma(0.5 m)로 묶으면
+            # 직선 복도에서 위치를 동선에 맞추려고 카메라 전체가 복도 축 둘레로 2~3° 기울어짐 (v4, RESULTS.md 3절)
+            k = float(rc.anchored_prior_sigma_scale)
+            loose = {**priors, "frames": [{**f, "sigma": [k * float(v) for v in f.get("sigma", [1.0, 1.0, 1.0])]}
+                                          for f in priors["frames"]]}
+            database.write_pose_priors(dbx, loose)
         vst = None
         if rc.anchored_verify_rot_deg > 0:
             t0 = time.time()

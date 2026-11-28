@@ -276,7 +276,9 @@ def test_register_anchored_flow(tmp_path, monkeypatch, finish, expect):
     fake = FakeRunner(h)
     monkeypatch.setattr(runner, "run", fake)
     monkeypatch.setattr(A, "solve_graph", lambda db, pri, nm, prm=None: _fake_graph(names))
-    monkeypatch.setattr("indoorgs.colmap.database.write_pose_priors", lambda db, pri: (len(names), []))
+    wrote = []
+    monkeypatch.setattr("indoorgs.colmap.database.write_pose_priors",
+                        lambda db, pri: wrote.append((str(db), pri["frames"][0]["sigma"])) or (len(names), []))
     monkeypatch.setattr("indoorgs.colmap.pair_verify.verify_pairs",
                         lambda db, ref, **kw: {"pairs": 0, "dropped": 0, "drop_rot": 0, "drop_no_pose": 0, "kw": kw})
     from indoorgs.stages.register import Register
@@ -303,6 +305,11 @@ def test_register_anchored_flow(tmp_path, monkeypatch, finish, expect):
     assert info["model"] == "sparse_aligned/0"
     assert info["mapper"] == ("pose_prior_mapper" if finish == "prior_mapper" else "anchored")
     assert (col / "anchored" / "anchored.json").exists()
+    assert wrote[0] == (str(col / "db.db"), [0.5, 0.5, 0.3])
+    if finish == "prior_mapper":                                   # 사본에는 느슨한 제약 (sigma x 4)
+        assert wrote[1] == (str(col / "db_anchored.db"), [2.0, 2.0, 1.2])
+    else:
+        assert len(wrote) == 1
     assert (ctx.paths.data_model / "images.bin").exists()
     # 짝 후보 파일: 앞뒤 seq_overlap(20) 장 넘는 짝만
     lines = (col / "anchored_pairs.txt").read_text(encoding="utf-8").split("\n")
@@ -352,3 +359,25 @@ def test_register_anchored_without_priors_falls_back(tmp_path, monkeypatch):
     assert Register().run(ctx).ok
     assert "matches_importer" not in fake.names() and "mapper" in fake.names()
     assert any("anchored" in m for m in logs)
+
+
+def test_solve_ls_without_scipy_matches(monkeypatch):
+    import builtins
+    rng = np.random.default_rng(0)
+    rows, cols, vals, rhs = [], [], [], []
+    for m in range(120):
+        for c in rng.choice(30, int(rng.integers(1, 4)), replace=False):
+            rows.append(m)
+            cols.append(int(c))
+            vals.append(float(rng.normal()))
+        rhs.append(float(rng.normal()))
+    x1 = A._solve_ls(rows, cols, vals, rhs, 30)
+    real = builtins.__import__
+
+    def no_scipy(name, *a, **k):
+        if name.startswith("scipy"):
+            raise ImportError(name)
+        return real(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", no_scipy)
+    x2 = A._solve_ls(rows, cols, vals, rhs, 30)
+    assert np.allclose(x1, x2, atol=1e-8)

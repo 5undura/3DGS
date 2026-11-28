@@ -139,6 +139,13 @@ sequential(앞뒤 `seq_overlap`장, `quadratic_overlap 0`, 루프 검출 없음)
 `pass1.done` 내용에 `|stride=N` 이 붙고(1 이면 예전 그대로), 바뀌면 후보 짝 전이면 1차부터, 후 이면 매칭부터 다시. `verify.done` settings 에도 `pass1_stride`(1 아닐 때).
 `register.pass2_mapper: global`(실험용, 기본 incremental) 이면 2차를 `db_verified.db` 사본 `db_global.db` 에 `view_graph_calibrator` → `global_mapper` (위치 제약 안 씀 → 수평 맞춤 + 제약에 맞춤이 필수,
 `gimbal_level: false` 면 `aligned: false`). 실패하면 `pose_prior_mapper` → `mapper`. register.json 에 `pass1_stride`·`pass2_mapper` 기록, `pass2_mapper` 가 바뀌면 2차부터 다시.
+`register.mode: anchored`(실험용, 기본 `two_pass` = 위 흐름; `experiments/anchored/RESULTS.md`, `colmap/anchored.py`)면 incremental 대신 동선 고정 정합:
+sequential(위와 같음) → 앞뒤 짝 회전으로 요 → 동선 거리 `anchored_max_dist_m`·요 차이 `anchored_max_yaw_deg` 안 짝 목록 `colmap/anchored_pairs.txt` → `matches_importer --match_type pairs`
+→ 자세 그래프(상대 회전 평균 + 짐벌 롤 0 + 약한 동선 요, 이동 방향 + 동선 위치) → `colmap/anchored/init` (점 없음)
+→ `db_anchored.db` 사본에서 그래프 회전과 `anchored_verify_rot_deg` 넘게 다른 짝 삭제 → `point_triangulator`(자세 고정) → 관측 `anchored_min_obs` 미만 사진 빼기
+→ 마무리 `anchored_finish`: `prior_mapper`(기본: `pose_prior_mapper --input_path`, 사본의 제약 sigma x `anchored_prior_sigma_scale`) | `ba`(`bundle_adjuster`↔`point_triangulator` 반복) | `windowed` | `none`,
+뒤 셋은 `image_registrator` → `point_triangulator` 로 나머지 등록 → `colmap/sparse/0` → 수평·제약 맞춤 `sparse_aligned/0`. 완료 표시 `matching.done`(= `anchored`) `candidates.done`(짝 설정 지문) `mapper.done`.
+register.json: `mode: anchored`, `mapper`(`pose_prior_mapper` 또는 `anchored`), `anchored`(그래프·짝 통계, 파이썬 단계 초), `anchored_finish`, `anchored_settings`(바뀌면 그래프부터 다시). 위치 제약이 없으면 기본 흐름.
 
 ### diagnose.json (diagnose가 씀)
 

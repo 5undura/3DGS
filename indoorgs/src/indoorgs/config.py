@@ -65,6 +65,7 @@ class RegisterCfg:
     anchored_verify_rot_deg: float = 10.0  # 삼각측량 전 DB 사본에서 상대 회전이 그래프 회전과 이보다 다른 짝 삭제 (0 = 안 함)
     anchored_min_obs: int = 30         # 삼각측량 뒤 3D 점 관측이 이보다 적은 사진은 빼고 마무리에서 다시 등록
     anchored_finish: str = "prior_mapper"  # prior_mapper (pose_prior_mapper --input_path: 나머지 등록 + 제약 BA) | ba | windowed | none
+    anchored_prior_sigma_scale: float = 4.0  # finish=prior_mapper: db_anchored.db 의 위치 제약 sigma 배수 (v4: x1 카메라 2.7~3.1° 기울어짐, x4 0.1~0.7°, x10 1.5~4°. RESULTS.md 3절)
     anchored_ba_rounds: int = 2        # finish=ba: bundle_adjuster -> 다시 삼각측량 을 몇 번
     anchored_ba_iters: int = 100       # finish=ba/windowed: bundle_adjuster 반복 수 (BundleAdjustmentCeres.max_num_iterations)
     anchored_window: int = 40          # finish=windowed: 창 크기 (사진 수, 반씩 겹침)

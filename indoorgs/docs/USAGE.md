@@ -95,6 +95,8 @@ GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있
   후보 범위: `verify_max_distance`(12 m, 매칭이 너무 오래 걸리면 8), `verify_max_neighbors`(300). 6 m·80장은 부족했음
   속도: 1차는 기본 3장마다만 정합하고 사이는 보간 (`pass1_stride: 3`, 예전처럼 전부면 1). 합성 복도에서 더 빠르고 접힘도 줄었음 (`experiments/e2e_v4/SPEED.md`).
   `pass2_mapper: global` 은 2차가 4~5배 빠르지만 **실험용, 위험** (seed 에 따라 크게 접힘). 쓰면 diagnose 결과(순간이동·뺀 사진)를 꼭 확인
+  `mode: anchored` (실험용): 그린 동선을 강한 자세 정보로 써서 incremental 정합 없이 자세를 먼저 정하고(짐벌 수평 가정), 동선 근처 짝만 매칭 → 자세 고정 삼각측량 → 한 번 마무리.
+  합성 복도에서 정합이 크게 빨라짐 (`experiments/anchored/RESULTS.md`). 기본값은 아직 바꾸지 않음. 쓰면 diagnose 결과를 꼭 확인. 손으로 기울여 찍은 영상에는 쓰지 말 것
 - 끝난 단계는 다시 안 돌림. 중간에 꺼도 다음에 이어서 실행
 - 로그는 화면 아래, 파일은 `logs\<구간>_<단계>.log`
 - 학습 시간(3060 Ti, 복도 1): Brush default 약 36분, LichtFeld default 약 1.5시간. 추출·정합은 따로

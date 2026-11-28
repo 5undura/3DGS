@@ -1,13 +1,16 @@
 """동선 고정(route-anchored) 정합: 그린 동선을 강한 자세 정보로 써서 incremental SfM 없이 자세를 정함 (실험용).
+결과·비교: experiments/anchored/RESULTS.md. COLMAP 명령 순서는 stages/register.py (register.mode: anchored).
 
-흐름 (stages/register.py 의 register.mode: anchored):
-  1) route_headings: 동선 위치(priors.json)의 진행 방향 -> 사진별 요(yaw) 초기값. 멈춤(속도 ~0)·급회전은 표시(flag)
-  2) select_pairs: 동선 순서 앞뒤 seq_window 장 + 동선 거리 max_dist_m 안이고 요 차이 max_yaw_deg 안인 짝만
-     -> pairs.txt -> COLMAP matches_importer (기하 검증은 COLMAP 그대로)
-  3) 자세 그래프 (점 없음): 검증된 짝의 inlier 로 상대 자세 (essential / 순수 회전은 방향 벡터 Procrustes)
-     -> rotation_averaging (상대 회전 + 롤 0(짐벌) + 약한 동선 요) -> translation_averaging (이동 방향 + 동선 위치)
-  4) write_initial_model (점 없는 cameras/images) -> point_triangulator (자세 고정) -> 필요하면 BA ->
-     pose_prior_mapper --input_path (나머지 사진 PnP 등록 + 위치 제약 전역 BA)
+흐름:
+  1) route_headings: 동선 위치(priors.json)의 진행 방향 -> 사진별 요(yaw) 초기값. 멈춤(속도 ~0)·급회전은 표시(flag),
+     표시된 사진은 동선 요 제약을 안 씀 (회전은 상대 회전으로만)
+  2) select_pairs: 앞뒤 seq_window 장 + 동선 거리 max_dist_m 안이고 요 차이 max_yaw_deg 안인 짝만
+     -> pairs.txt -> COLMAP matches_importer (기하 검증은 COLMAP 그대로). 요는 앞뒤 짝만으로 구한 회전(graph_yaw)
+  3) solve_graph (점 없음): 검증된 짝의 inlier 로 상대 자세 (essential / 순수 회전은 방향 벡터 Procrustes)
+     -> solve_rotations (상대 회전 + 롤 0(짐벌) + 약한 동선 요, 잔차 큰 먼 짝 빼기)
+     -> translation_averaging (이동 방향 + 동선 위치). scale_ratios(점 깊이로 기선 비)는 v4 에서 축척이 줄어 기본 안 씀
+  4) initial_model (점 없는 cameras/images) -> point_triangulator (자세 고정) -> weak_images 빼기 -> 마무리
+     (pose_prior_mapper --input_path, 또는 bundle_adjuster 반복 / 창 BA(windows, merge_windows) + image_registrator)
 초점거리: 영상 프레임에 EXIF 가 없어 feature_extractor 의 초기값(1.2 x 긴 변)이 틀림 -> estimate_focal 로
 F 행렬들에서 추정 (K^T F K 의 두 특이값이 같아지는 f, 1차원 탐색). config 로 직접 줄 수도 있음.
 
@@ -334,9 +337,23 @@ def _solve_ls(rows: list, cols: list, vals: list, rhs: list, n: int) -> np.ndarr
         AtA = AtA + 1e-9 * _speye(n)
         return np.asarray(spsolve(AtA, A.T @ np.asarray(rhs, float))).ravel()
     except ImportError:
-        A = np.zeros((m, n))
-        np.add.at(A, (rows, cols), vals)
-        return np.linalg.lstsq(A, np.asarray(rhs, float), rcond=None)[0]
+        # scipy 없음: 정규방정식을 밀집 n x n 으로 직접 모음 (A 를 m x n 으로 만들면 1,380장에서 GB 단위)
+        r, c, v = np.asarray(rows), np.asarray(cols), np.asarray(vals, float)
+        b = np.asarray(rhs, float)
+        AtA = np.zeros((n, n))
+        Atb = np.zeros(n)
+        np.add.at(Atb, c, v * b[r])
+        order = np.argsort(r, kind="stable")
+        r, c, v = r[order], c[order], v[order]
+        starts = np.flatnonzero(np.r_[True, r[1:] != r[:-1]])
+        cnt = np.diff(np.r_[starts, len(r)])
+        for k in range(1, int(cnt.max()) + 1):              # 줄마다 0이 아닌 값이 몇 개 안 됨 (여기선 3개 이하)
+            for a in range(k):
+                for bb in range(k):
+                    sel = starts[cnt == k]
+                    np.add.at(AtA, (c[sel + a], c[sel + bb]), v[sel + a] * v[sel + bb])
+        AtA[np.diag_indices(n)] += 1e-9
+        return np.linalg.solve(AtA, Atb)
 
 
 def _speye(n):
@@ -490,7 +507,7 @@ def initial_model(dbd: DbData, order: list[str], R_wc: np.ndarray, C: np.ndarray
                   focal: float | None) -> cmodel.Model:
     """점 없는 COLMAP 모델 (cameras + images, DB 의 image_id·camera_id 그대로). focal 을 주면 카메라 초점거리·주점(가운데)을
     바꾸고 왜곡은 0 (point_triangulator 가 이 카메라를 씀). frames.bin/rigs.bin 은 안 씀 (4.2.1 은 없으면 사진마다 frame 을 만듦:
-    pycolmap 4.2.1 Reconstruction 읽기로 확인)."""
+    pycolmap 4.2.1 Reconstruction 읽기로 확인. TODO(PC): COLMAP.bat point_triangulator 로 확인)."""
     cid, mdl, w, h, params = dbd.camera
     params = np.array(params, float)
     if focal:
