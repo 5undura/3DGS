@@ -473,8 +473,8 @@ def test_register_pass1_stride_image_list_and_interpolation(tmp_path, monkeypatc
 
 
 def test_register_pass1_stride_1_keeps_old_markers(tmp_path, monkeypatch):
-    """기본(1)은 예전과 같음: 사진 목록 옵션 없음, 보간 없음, pass1.done·verify 설정 지문도 예전 그대로."""
-    root = make_project(tmp_path / "p")
+    """1 은 예전과 같음: 사진 목록 옵션 없음, 보간 없음, pass1.done·verify 설정 지문도 예전 그대로."""
+    root = make_project(tmp_path / "p", extra_yaml="register: {pass1_stride: 1}\n")
     ctx, _ = ctx_of(root)
     names = _write_priors(ctx)
     fake = FakeRunner(colmap_handlers())
@@ -489,7 +489,7 @@ def test_register_pass1_stride_1_keeps_old_markers(tmp_path, monkeypatch):
 
 
 def test_register_pass1_stride_changed_before_candidates_redoes_pass1_only(tmp_path, monkeypatch):
-    root = make_project(tmp_path / "p")
+    root = make_project(tmp_path / "p", extra_yaml="register: {pass1_stride: 1}\n")
     ctx, logs = ctx_of(root)
     names = _write_priors(ctx)
     h = colmap_handlers()
@@ -511,7 +511,7 @@ def test_register_pass1_stride_changed_before_candidates_redoes_pass1_only(tmp_p
 
 def test_register_pass1_stride_changed_after_candidates_rematches(tmp_path, monkeypatch):
     """후보 짝이 이미 db.db 에 들어갔으면 1차를 다시 돌릴 수 없음 (가짜 짝이 1차에 섞임) -> 매칭부터."""
-    root = make_project(tmp_path / "p")
+    root = make_project(tmp_path / "p", extra_yaml="register: {pass1_stride: 1}\n")
     ctx, logs = ctx_of(root)
     names = _write_priors(ctx)
     h = colmap_handlers()

@@ -53,7 +53,7 @@ class RegisterCfg:
     verify_max_far_m: float = 1.5      # 1차에서 제약과 이보다 먼 사진은 기준에서 뺌
     gimbal_level: bool = True          # 화면 수평 유지(짐벌) 가정으로 모델을 수평 맞춤. 손으로 기울여 찍은 영상이면 끔
     # 속도 (experiments/e2e_v4/SPEED.md). 1차는 짝 검증용 기준 자세만 있으면 되므로 N장마다만 정합하고 사이는 보간 가능
-    pass1_stride: int = 1              # 1차 pose_prior_mapper 를 N장마다 (1 = 모두). 사이 사진은 같은 모델 안 앞뒤로 보간(간격 2N 이하만)
+    pass1_stride: int = 3              # 1차 pose_prior_mapper 를 N장마다 (1 = 모두, 예전). 사이 사진은 같은 모델 안 앞뒤로 보간(간격 2N 이하만)
     pass2_mapper: str = "incremental"  # incremental | global (2차를 global_mapper 로. 끝나면 수평 맞추고 제약에 다시 맞춤)
 
 
