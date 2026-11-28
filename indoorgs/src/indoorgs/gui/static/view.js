@@ -110,6 +110,12 @@ export class PlanView {
     g.fillStyle = T.scale; g.fillRect(this.w - 20 - len * s, this.h - 22, len * s, 2);
     g.font = '11px system-ui'; g.textAlign = 'right'; g.fillText(`${len} m`, this.w - 20, this.h - 28);
   }
+  // 글자 + 배경색 테두리 (선 위에서도 읽히게). 색·글꼴·정렬은 부른 쪽에서 정함
+  label(text, x, y) {
+    const g = this.g;
+    g.save(); g.lineWidth = 3; g.lineJoin = 'round'; g.strokeStyle = T.bg; g.strokeText(text, x, y); g.restore();
+    g.fillText(text, x, y);
+  }
   poly(pts) {
     const g = this.g; g.beginPath();
     pts.forEach(([x, y], i) => i ? g.lineTo(this.sx(x), this.sy(y)) : g.moveTo(this.sx(x), this.sy(y)));
@@ -126,7 +132,7 @@ export class PlanView {
       g.lineWidth = sel ? 2 : 1.5; g.strokeStyle = sel ? T.sel : opt.dim ? T.roomDim : T.room; g.stroke();
       const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length, cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
       g.fillStyle = sel ? T.sel : opt.dim ? T.labelDim : T.label; g.font = '12px system-ui'; g.textAlign = 'center';
-      g.fillText(r.name || r.id, this.sx(cx), this.sy(cy));
+      this.label(r.name || r.id, this.sx(cx), this.sy(cy));
     }
   }
   door(d, poly, sel) {

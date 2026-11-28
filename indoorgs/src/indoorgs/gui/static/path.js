@@ -52,7 +52,7 @@ export function initPath(state) {
       g.fillStyle = T.anchorTxt; g.font = '600 10px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText(k + 1, X, Y + .5);
       g.textBaseline = 'alphabetic'; g.font = '11px system-ui'; g.fillStyle = T.label;
-      g.fillText(`${a.t.toFixed(1)}s`, X, Y - 12);
+      view.label(`${a.t.toFixed(1)}s`, X, Y - 12);
     });
     const cur = posAt(video.currentTime || 0);
     if (cur) {

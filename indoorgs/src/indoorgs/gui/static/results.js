@@ -15,6 +15,16 @@ export function initResults(state) {
   const R = { view: 'report', sec: null, run: null, data: null, tex: null, imgs: null };
 
   document.querySelectorAll('#result-views button').forEach(b => b.onclick = () => setView(b.dataset.view));
+  // 보고서 파일은 밝은 그대로 두고, GUI 안에서 볼 때만 어두운 테마를 덧씌움
+  $('#report-frame').addEventListener('load', e => {
+    const d = e.target.contentDocument; if (!d?.head) return;
+    const st = d.createElement('style');
+    st.textContent = `body{background:${T.bg};color:${T.text};font-size:13px}a{color:#5a88cc}
+      h1,h2{color:#ececec}.sub,th,.legend{color:${T.mute}}.none{color:#6e6e6e}.warn{color:${T.bad}}
+      th,td{border-bottom-color:#3a3a3a}th{background:#2b2b2b}.lbl{fill:${T.label}}
+      .map{border-color:#3a3a3a;background:${T.bg}}.map polygon{fill:${T.roomFill};stroke:${T.room}}.map line{stroke:${T.scale}}`;
+    d.head.appendChild(st);
+  });
   $('#report-rebuild').onclick = () => { $('#report-frame').src = '/api/report?rebuild=1&_=' + Date.now(); };
   const secs = state.project.sections.map(s => s.name);
   $('#walls-section').innerHTML = secs.map(s => `<option>${esc(s)}</option>`).join('');
