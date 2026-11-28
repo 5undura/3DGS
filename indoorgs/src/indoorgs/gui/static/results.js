@@ -72,17 +72,19 @@ export function initResults(state) {
   function facesHtml(pj) {
     if (!pj) return `<p>${none} <span class="muted small">(도면 좌표 정합 + walls.enabled 일 때만)</span></p>`;
     const fit = pj.fit || [];
-    const nf = fit.filter(i => i.source === 'fit').length;
+    const FITTED = new Set(['fit', 'fit_scaled']);
+    const nf = fit.filter(i => FITTED.has(i.source)).length;
+    const sc = pj.scale_check && pj.scale_check.warn ? `<p class="small warn">축척 경고: ${esc(pj.scale_check.message || '')}</p>` : '';
     const rows = fit.map(i => {
       const big = Math.abs(i.shift_m || 0) >= BIG;
       return `<tr class="${big ? 'big' : ''}" title="${esc(i.reason || '')}"><td>${esc(i.id)}</td><td>${esc(i.kind || '')}</td>
-        <td><span class="tag ${i.source === 'fit' ? 'fit' : 'plan'}">${i.source === 'fit' ? '맞춤' : '도면'}</span></td>
+        <td><span class="tag ${FITTED.has(i.source) ? 'fit' : 'plan'}">${i.source === 'fit' ? '맞춤' : i.source === 'fit_scaled' ? '맞춤(축척)' : '도면'}</span></td>
         <td class="num ${big ? 'warn' : ''}">${i.shift_m == null ? '-' : (i.shift_m * 100 >= 0 ? '+' : '') + (i.shift_m * 100).toFixed(1)}</td>
         <td class="num">${f(i.tilt_deg, 2)}${i.clamped ? ' <span class="muted small">제한</span>' : ''}</td>
         <td class="num">${n0(i.n_points)}</td><td class="num">${pct(i.coverage)}</td>
         <td class="small muted">${esc(i.reason || '')}</td></tr>`;
     }).join('');
-    return `<p class="small">면 ${fit.length}개 중 <b>${nf}</b>개를 정합 점으로 맞춤${pj.seed ? ` · 초기 점 ${n0(pj.seed.n_added)}개` : ''}
+    return `${sc}<p class="small">면 ${fit.length}개 중 <b>${nf}</b>개를 정합 점으로 맞춤${pj.seed ? ` · 초기 점 ${n0(pj.seed.n_added)}개` : ''}
       · <span class="warn">빨간 줄</span> = 도면과 ${BIG * 100} cm 이상 차이</p>
       <table class="grid small"><tr><th>면</th><th>종류</th><th>출처</th><th class="num">이동 cm</th><th class="num">기울기 °</th>
       <th class="num">점</th><th class="num">덮임</th><th>이유</th></tr>${rows || '<tr><td colspan="8" class="muted">없음</td></tr>'}</table>`;
@@ -98,7 +100,7 @@ export function initResults(state) {
     };
     const plan = (pj.plan_planes || []).map(seg).filter(Boolean);
     const fitInfo = Object.fromEntries((pj.fit || []).map(i => [i.id, i]));
-    const fitted = (pj.planes || []).map(seg).filter(s => s && fitInfo[s.id]?.source === 'fit');
+    const fitted = (pj.planes || []).map(seg).filter(s => s && ['fit', 'fit_scaled'].includes(fitInfo[s.id]?.source));
     if (!plan.length && !fitted.length) return '';
     const pts = [...plan, ...fitted].flatMap(s => [s.a, s.b]);
     const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
