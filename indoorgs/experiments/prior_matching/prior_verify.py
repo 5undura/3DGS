@@ -50,7 +50,9 @@ def level_rotation(R_wc: np.ndarray) -> np.ndarray:
     """짐벌 카메라(수평 유지) 가정: 카메라 오른쪽 축들과 가장 수직인 방향을 위(+z)로 돌리는 회전 Q."""
     rx = R_wc[:, :, 0]
     _, v = np.linalg.eigh(rx.T @ rx)
-    g = v[:, 0] if v[2, 0] >= 0 else -v[:, 0]
+    g = v[:, 0]
+    if g @ (-R_wc[:, :, 1].mean(0)) < 0:        # 위 = 카메라 아래축(y)의 반대쪽
+        g = -g
     ax = np.cross(g, [0, 0, 1.0])
     sn, cs = float(np.linalg.norm(ax)), float(g[2])
     if sn < 1e-9:
@@ -58,6 +60,27 @@ def level_rotation(R_wc: np.ndarray) -> np.ndarray:
     ax /= sn
     Kx = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
     return np.eye(3) + sn * Kx + (1 - cs) * Kx @ Kx
+
+
+def fit_to_priors(R_wc: np.ndarray, C: np.ndarray, P: np.ndarray, iters: int = 5, scale_m: float = 1.0):
+    """수평을 맞춘 모델을 제약 위치 P 에 맞춤: 수직축 회전 + 축척 + 이동, Cauchy 가중 최소제곱 (P 가 NaN 인 사진은 빼고 계산).
+    일직선 동선에서 위치 제약만으로는 복도 축 둘레 기울기(뒤집힘 포함)가 안 정해지므로 수평 맞추기와 꼭 같이 쓴다.
+    돌려줌: (R_wc, C, {"scale", "resid_median"})"""
+    ok = ~np.isnan(P[:, 0])
+    if ok.sum() < 3:
+        return R_wc, C, {"scale": 1.0, "resid_median": float("nan")}
+    w = ok.astype(float)
+    for _ in range(iters):
+        ca, pa = (w[:, None] * C).sum(0) / w.sum(), (w[:, None] * np.nan_to_num(P)).sum(0) / w.sum()
+        za = (C[:, 0] - ca[0]) + 1j * (C[:, 1] - ca[1])
+        zb = np.nan_to_num(P[:, 0] - pa[0]) + 1j * np.nan_to_num(P[:, 1] - pa[1])
+        k = (w * np.conj(za)) @ zb / max(1e-12, abs((w * np.conj(za)) @ za))
+        s, th = abs(k), float(np.angle(k))
+        Rz = np.array([[math.cos(th), -math.sin(th), 0], [math.sin(th), math.cos(th), 0], [0, 0, 1.0]])
+        C2 = s * (C - ca) @ Rz.T + pa
+        r = np.linalg.norm(np.nan_to_num(C2 - P), axis=1)
+        w = ok / (1.0 + (r / scale_m) ** 2)
+    return np.einsum("ij,njk->nik", Rz, R_wc), C2, {"scale": float(s), "resid_median": float(np.median(r[ok]))}
 
 
 def load_reference(sparse: Path, priors: dict, max_far_m: float = 1.5, min_model: int = 10,
@@ -83,10 +106,9 @@ def load_reference(sparse: Path, priors: dict, max_far_m: float = 1.5, min_model
         C = np.array([im.center for im in ims])
         if level:
             Q = level_rotation(R)
-            c0 = C.mean(0)
-            C = (C - c0) @ Q.T + c0
-            R = np.einsum("ij,njk->nik", Q, R)
             tilt.append(math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(Q) - 1) / 2)))))
+            P = np.array([pri.get(im.name, np.full(3, np.nan)) for im in ims])
+            R, C, _ = fit_to_priors(np.einsum("ij,njk->nik", Q, R), C @ Q.T, P)
         for im, r, c in zip(ims, R, C):
             if im.name in poses:
                 continue

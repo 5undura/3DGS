@@ -82,6 +82,9 @@ RUNS: dict[str, dict] = {
     "np_spa6k80_pose_prior": {"pairs": ["spatial:6:80", "pose:seq20:align"], "prior": "good"},
     "spa6k80_pose_seq20_prior": {"pairs": ["spatial:6:80", "pose:seq20_prior"], "prior": "good"},
     "spa6k80_pose_seq20": {"pairs": ["spatial:6:80", "pose:seq20_prior"]},
+    "spa12_pose_seq20_prior": {"pairs": ["spatial:12:0", "pose:seq20_prior"], "prior": "good"},
+    "spa12_pose_seq20": {"pairs": ["spatial:12:0", "pose:seq20_prior"]},
+    "spa8_pose_seq20_prior": {"pairs": ["spatial:8:0", "pose:seq20_prior"], "prior": "good"},
     # (d) 되풀이: 일반 exhaustive + 제약 결과에서 제약 가까운 사진의 자세로 검증
     "pose_exh_prior": {"pairs": ["pose:exh_prior"], "prior": "good"},
     # (c) 제약 세기·mapper 옵션 (짝은 그대로)
@@ -235,7 +238,7 @@ def level_model(m: dict) -> float:
     rx = m["R"][:, :, 0]
     w, v = np.linalg.eigh(rx.T @ rx)
     g = v[:, 0]
-    if g[2] < 0:
+    if g @ (-m["R"][:, :, 1].mean(0)) < 0:      # 위 = 카메라 아래축(y)의 반대쪽 (제약 없이 만든 모델은 뒤집혀 있을 수 있음)
         g = -g
     ax = np.cross(g, [0, 0, 1.0])
     sn, cs = np.linalg.norm(ax), float(g[2])
@@ -558,8 +561,8 @@ def eval_run(sc: Scene, run: str) -> dict:
 
 
 def fmt_table(rows: list[dict]) -> str:
-    hdr = ("| run | 짝 (가짜) | 갈때-올때 진짜 짝 | 모델 크기 | 큰 모델: 맞음/틀림 (Sim3) | 모든 모델: 맞음/틀림 (Sim3, 모델별) |"
-           " 도면좌표: 등록/맞음/틀림 (모든 모델) | 도면 오차 중앙 (m) | 도면 기울기 중앙 (°) | 순간이동 | 제약에서 >1m (그중 진짜 틀림) | 시간 정합+거르기 (s) |")
+    hdr = ("| run | 짝 (가짜) | 40장 넘게 떨어진 진짜 짝 | 모델 크기 | 큰 모델: 맞음/틀림 (Sim3) | 모든 모델: 맞음/틀림 (Sim3, 모델별) |"
+           " 도면좌표: 등록/맞음/틀림 (모든 모델) | 도면 오차 중앙 (m) | 도면 기울기 중앙 (°) | 순간이동 | 제약에서 >1m (그중 진짜 틀림) | 직접 맞춤: 맞음/틀림, 중앙 m, 기울기 ° | 시간 정합+거르기 (s) |")
     lines = [hdr, "|" + "---|" * (hdr.count("|") - 1)]
     for r in rows:
         if not r.get("registered"):
