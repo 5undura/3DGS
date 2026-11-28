@@ -15,7 +15,7 @@
   --cv-label:#b4b4b4;--cv-label-dim:#777;
   --cv-sel:#5a88cc;--cv-sel-fill:rgba(71,114,179,.14);--cv-handle:#e8a33d;
   --cv-door:#e8a33d;--cv-route:#4cc9f0;--cv-anchor:#f2f2f2;--cv-anchor-txt:#1d1d1d;--cv-cursor:#e5484d;
-  --cv-draft:#b59cf0;--cv-scale:#c8c8c8;
+  --cv-draft:#b59cf0;--cv-draft-corr:#5fb8a8;--cv-draft-low:#d9a03f;--cv-scale:#c8c8c8;
   --cv-3d-bg:#393939;--cv-3d-wall:#8c8c8c;--cv-3d-floor:#4a4a4a;--cv-3d-edge:#d0d0d0;
 }
 *{box-sizing:border-box}
@@ -160,3 +160,4 @@ input[type=range]{width:100%}
 .post-set{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;max-width:960px}
 .post-set .card label.chk{margin:2px 12px 2px 0}
 .post-set .form{grid-template-columns:110px 1fr}
+.impsel{border-top:1px solid var(--line);margin-top:6px;padding-top:4px}

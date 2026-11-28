@@ -383,7 +383,7 @@ export function initSpace(state) {
   $('#space-snap').onchange = () => view.redraw();
   document.addEventListener('keydown', e => {
     if (state.tab !== 'space' || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName)) return;
-    if (S.preview) { if (e.key === 'Escape') S.preview.cancel(); return; }
+    if (S.preview) { if (e.key === 'Escape') S.preview.cancel(); else S.preview.key?.(e); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') { del(); e.preventDefault(); }
     if (e.key === 'Escape') { select(null); setTool('select'); }
     if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save(); }

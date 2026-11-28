@@ -1,7 +1,11 @@
 // 공간 화면: 도면 불러오기 (DXF · SVG · 사진) -> 초안 미리보기 -> 바꾸기 / 추가하기 / 취소
-import { toast, $, esc, T } from './util.js';
+// 사진 초안: 방마다 믿음(%)·복도/방 표시, 클릭해서 선택 -> 삭제 · 촬영 안 함 · 복도/방 바꾸기,
+// '클릭해서 영역 추가'(마법봉: /api/plan/wand) 로 빠진 방을 하나씩 더함
+import { api, toast, $, esc, T } from './util.js';
 import { fromJson, roomPoly, snap, r3 } from './model.js';
 
+const SKIP = '[촬영 안 함]';        // 이름 끝 표시: 사진 초안에서 촬영 안 한 방
+const LOW = 0.6;                   // 이보다 믿음 낮으면 다른 색
 const KIND = { dxf: 'dxf', svg: 'svg', png: 'image', jpg: 'image', jpeg: 'image', bmp: 'image', webp: 'image', tif: 'image', tiff: 'image' };
 
 export function initImport(ctx) {
@@ -41,7 +45,8 @@ export function initImport(ctx) {
       <label>세로 (m)</label><input type="number" step="0.1" id="imp-h" value="${o.size_m[1]}">
       <label>보정 px / m</label><input type="number" step="1" id="imp-ppm" value="${o.px_per_m}">
       <label></label><label class="chk"><input type="checkbox" id="imp-flat" ${cur.flat ? 'checked' : ''}> 네 점 없이 (위에서 본 그림, px/m = 그림 축척)</label>
-      <label></label><label class="chk"><input type="checkbox" id="imp-png" ${o.save_png ? 'checked' : ''}> 적용할 때 plan.png 로 저장</label>`;
+      <label></label><label class="chk"><input type="checkbox" id="imp-png" ${o.save_png ? 'checked' : ''}> 적용할 때 plan.png 로 저장</label>
+      <label></label><label class="chk" title="새 방식: 복도·방 영역 분할 + 문 + 믿음. 예전: 이진화 빈 공간 덩어리"><input type="checkbox" id="imp-old" ${o.method === 'binary' ? 'checked' : ''}> 예전 방식 (이진화)</label>`;
     if (k !== 'image') body += `<label></label><label class="chk"><input type="checkbox" id="imp-rc" ${o.recenter ? 'checked' : ''}> 왼쪽 아래를 (0, 0) 으로</label>`;
     panel.innerHTML = `<h3>도면 불러오기</h3><p class="small muted">${esc(cur.file.name)} · ${k.toUpperCase()}</p>
       ${k === 'image' ? '<p class="small">사진 위에서 도면 네 모서리를 클릭하고, 그 사각형의 실제 가로·세로를 넣으세요.</p>'
@@ -58,6 +63,7 @@ export function initImport(ctx) {
     if (cur.kind === 'dxf') { const v = num('#imp-scale'); if (isNaN(v)) delete o.scale_m; else o.scale_m = v; }
     if (cur.kind === 'image') {
       o.size_m = [num('#imp-w'), num('#imp-h')]; o.px_per_m = num('#imp-ppm'); o.save_png = $('#imp-png').checked;
+      o.method = $('#imp-old').checked ? 'binary' : 'segment';
       if (cur.flat) { delete o.corners; } else {
         if (cur.corners.length !== 4) throw new Error('사진에서 네 모서리를 클릭하세요');
         if (!(o.size_m[0] > 0 && o.size_m[1] > 0)) throw new Error('가로·세로 실제 길이(m)를 넣으세요');
@@ -128,8 +134,9 @@ export function initImport(ctx) {
     const m = fromJson(j.plan);
     const P = {
       j, rooms: m.rooms, doors: m.doors, source: m.source, segs: j.segments, off: [0, 0], measure: null, bg: null,
-      draw, down, hover: null, cancel: close,
+      draw, down, hover: null, cancel: close, key, items: {}, sel: null, wand: false, tol: 18,
     };
+    for (const it of j.items || []) for (const rid of it.rooms) P.items[rid] = { group: it.id, kind: it.kind, conf: it.conf };
     S.preview = P; S.sel = null;
     if (j.rectified_png) {
       const img = new Image();
@@ -152,12 +159,15 @@ export function initImport(ctx) {
     g.stroke(); g.globalAlpha = 1;
     g.setLineDash([5, 3]);
     for (const r of P.rooms) {
-      const pts = roomPoly(r);
-      view.poly(pts); g.fillStyle = T.draft; g.globalAlpha = .12; g.fill(); g.globalAlpha = 1;
-      g.lineWidth = 1.5; g.strokeStyle = T.draft; g.stroke();
+      const pts = roomPoly(r), it = P.items[r.id], skip = r.name.endsWith(SKIP), sel = P.sel === r.id;
+      const col = it && it.conf < LOW ? T.draftLow : it?.kind === 'corridor' ? T.draftCorr : T.draft;
+      view.poly(pts); g.fillStyle = sel ? T.sel : col; g.globalAlpha = skip ? .04 : sel ? .25 : .12; g.fill(); g.globalAlpha = skip ? .5 : 1;
+      g.lineWidth = sel ? 2.5 : 1.5; g.strokeStyle = sel ? T.sel : col; g.stroke();
       const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length, cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
-      g.fillStyle = T.draft; g.font = '11px system-ui'; g.textAlign = 'center';
-      g.fillText(r.id, view.sx(cx), view.sy(cy));
+      g.fillStyle = sel ? T.sel : col; g.font = '11px system-ui'; g.textAlign = 'center';
+      g.fillText(r.id + (it ? ` ${Math.round(it.conf * 100)}%` : ''), view.sx(cx), view.sy(cy));
+      if (skip) g.fillText('촬영 안 함', view.sx(cx), view.sy(cy) + 13);
+      g.globalAlpha = 1;
     }
     g.setLineDash([]);
     const ms = P.measure;
@@ -182,9 +192,11 @@ export function initImport(ctx) {
       P.measure.push(snapPt(w)); view.redraw(); previewPanel();
       return {};
     }
-    // 초안 끌어서 옮기기 (빈 곳이 아니라 초안 방 위에서만)
-    const hit = P.rooms.some(r => inPoly(w, roomPoly(r)));
-    if (!hit) return null;
+    if (P.wand) { wandAt(w); return {}; }
+    // 초안 방 클릭 = 선택, 끌면 초안 전체 위치 이동 (빈 곳이 아니라 초안 방 위에서만)
+    const hit = [...P.rooms].reverse().find(r => inPoly(w, roomPoly(r)));
+    if (!hit) { if (P.sel) { P.sel = null; view.redraw(); previewPanel(); } return null; }
+    if (P.sel !== hit.id) { P.sel = hit.id; view.redraw(); previewPanel(); }
     let last = [0, 0];
     return {
       move(p) {
@@ -232,15 +244,116 @@ export function initImport(ctx) {
       ${P.measure ? `<p class="small">${mlen == null ? '초안에서 길이를 아는 두 점을 클릭 (끝점에 붙음)' : `잰 길이 ${r3(mlen)} m`}</p>
         ${mlen ? `<div class="form"><label>실제 길이 (m)</label><input type="number" step="0.01" id="imp-real"></div>
         <div class="btnrow"><button id="imp-rescale">이 길이로 축척 고치기</button></div>` : ''}` : ''}
+      ${wandHtml()}${selHtml()}
       <div class="btnrow"><button class="primary" id="imp-replace" title="기존 방·문 대신 초안으로">바꾸기</button>
         <button id="imp-add" title="기존 방에 합치기 (id 겹치면 새 id)">추가하기</button><button id="imp-cancel">취소</button></div>
       <p class="small muted">적용해도 저장 전까지 plan.json 은 그대로.</p>`;
-    $('#imp-measure').onclick = () => { P.measure = P.measure ? null : []; view.redraw(); previewPanel(); };
+    $('#imp-measure').onclick = () => { P.measure = P.measure ? null : []; if (P.measure) P.wand = false; view.redraw(); previewPanel(); };
     $('#imp-back').onclick = () => { endPreview(); if (cur.kind === 'image') showPhoto(); optionsPanel(); };
     $('#imp-replace').onclick = () => apply(true);
     $('#imp-add').onclick = () => apply(false);
     $('#imp-cancel').onclick = close;
     const rs = $('#imp-rescale'); if (rs) rs.onclick = () => rescale(mlen, parseFloat($('#imp-real').value));
+    bindWandSel();
+  }
+
+  // ---------- 사진 초안: 선택한 방 고치기, 마법봉 ----------
+  function selHtml() {
+    const P = S.preview, low = P.rooms.filter(r => P.items[r.id]?.conf < LOW).length;
+    const r = P.rooms.find(x => x.id === P.sel);
+    let h = '';
+    if (r) {
+      const it = P.items[r.id], skip = r.name.endsWith(SKIP), corr = it ? it.kind === 'corridor' : r.name.startsWith('복도');
+      h += `<div class="impsel"><p class="small">선택 <b>${esc(r.id)}</b> · ${corr ? '복도' : '방'}${it ? ` · 믿음 ${Math.round(it.conf * 100)}%` : ''}
+        ${r.kind === 'box' ? ` · ${r3(r.w)} × ${r3(r.d)} m` : ''}${skip ? ' · 촬영 안 함' : ''}</p>
+        <div class="btnrow"><button id="imp-del" title="Delete 키">삭제</button>
+        <button id="imp-skip" class="${skip ? 'on' : ''}" title="이름 끝에 ${SKIP} 를 붙임">${skip ? '촬영 안 함 해제' : '촬영 안 함'}</button>
+        <button id="imp-kind">${corr ? '방으로' : '복도로'}</button></div></div>`;
+    }
+    if (low) h += `<div class="btnrow"><button id="imp-dellow" title="믿음 ${LOW * 100}% 미만 초안 방 지우기">믿음 낮은 것 지우기 (${low})</button></div>`;
+    if (P.j.items) h += '<p class="small muted">촬영 안 한 방도 남겨도 됨: 벽 단계는 카메라가 있는 방만 씀. 방을 클릭해서 고치기.</p>';
+    return h;
+  }
+  function wandHtml() {
+    const P = S.preview;
+    if (cur.kind !== 'image' || !P.j.source_file || P.j.plan.source.method === 'binary') return '';
+    return `<div class="btnrow"><button id="imp-wand" class="${P.wand ? 'on' : ''}">${P.wand ? '영역 추가 끄기' : '클릭해서 영역 추가'}</button></div>
+      ${P.wand ? `<p class="small">빠진 방·복도 안쪽을 클릭 (벽·문 틈 안쪽까지 채움)</p>
+        <div class="form"><label>색 허용 (Lab)</label><input type="number" step="2" min="2" id="imp-tol" value="${P.tol}"></div>` : ''}`;
+  }
+  function bindWandSel() {
+    const P = S.preview, on = (id, f) => { const b = $(id); if (b) b.onclick = f; };
+    on('#imp-wand', () => { P.wand = !P.wand; if (P.wand) P.measure = null; view.redraw(); previewPanel(); });
+    const tol = $('#imp-tol'); if (tol) tol.onchange = () => { const v = parseFloat(tol.value); if (v > 0) P.tol = v; };
+    on('#imp-del', () => delRooms([P.sel]));
+    on('#imp-dellow', () => delRooms(P.rooms.filter(r => P.items[r.id]?.conf < LOW).map(r => r.id)));
+    on('#imp-skip', () => {
+      const r = P.rooms.find(x => x.id === P.sel); if (!r) return;
+      r.name = r.name.endsWith(SKIP) ? r.name.slice(0, -SKIP.length).trim() : `${r.name} ${SKIP}`.trim();
+      view.redraw(); previewPanel();
+    });
+    on('#imp-kind', () => {
+      const r = P.rooms.find(x => x.id === P.sel); if (!r) return;
+      const it = P.items[r.id] || (P.items[r.id] = { group: r.id, kind: r.name.startsWith('복도') ? 'corridor' : 'room', conf: 1 });
+      const skip = r.name.endsWith(SKIP);
+      it.kind = it.kind === 'corridor' ? 'room' : 'corridor';
+      r.name = (it.kind === 'corridor' ? '복도' : '') + (skip ? ` ${SKIP}` : '');
+      r.name = r.name.trim();
+      view.redraw(); previewPanel();
+    });
+  }
+  function key(e) {
+    const P = S.preview;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && P.sel) { delRooms([P.sel]); e.preventDefault(); }
+  }
+  function delRooms(ids) {
+    const P = S.preview, gone = new Set(ids.filter(Boolean));
+    if (!gone.size) return;
+    P.rooms = P.rooms.filter(r => !gone.has(r.id));
+    P.doors = P.doors.filter(d => !d.rooms.some(x => gone.has(x)));
+    for (const id of gone) delete P.items[id];
+    if (gone.has(P.sel)) P.sel = null;
+    view.redraw(); previewPanel(); toast(`초안 방 ${gone.size}개 지움`);
+  }
+  function sharedDoor(a, b, id) {     // 축 정렬 박스 두 개가 맞닿은 변 -> 통로(문)
+    const A = [a.cx - a.w / 2, a.cy - a.d / 2, a.cx + a.w / 2, a.cy + a.d / 2], B = [b.cx - b.w / 2, b.cy - b.d / 2, b.cx + b.w / 2, b.cy + b.d / 2], e = 0.05;
+    for (const ax of [0, 1]) {         // 0: x 쪽 변, 1: y 쪽 변
+      const o = 1 - ax;
+      for (const [p, q] of [[A[ax + 2], B[ax]], [B[ax + 2], A[ax]]]) {
+        if (Math.abs(p - q) > e) continue;
+        const lo = Math.max(A[o], B[o]), hi = Math.min(A[o + 2], B[o + 2]);
+        if (hi - lo < 0.3) continue;
+        const c = ax === 0 ? [r3(p), r3((lo + hi) / 2)] : [r3((lo + hi) / 2), r3(p)];
+        return { id, rooms: [a.id, b.id], center: c, width: r3((hi - lo) * 0.9), height: 2.1 };
+      }
+    }
+    return null;
+  }
+  async function wandAt(w) {
+    const P = S.preview, o = cur.opt;
+    if (P.busy) return;
+    P.busy = true;
+    try {
+      const j = await api('/api/plan/wand', { method: 'POST', body: {
+        source_file: P.j.source_file, corners: o.corners, size_m: o.size_m, px_per_m: P.j.plan.source.px_per_m,
+        point: [w[0] - P.off[0], w[1] - P.off[1]], tol: P.tol } });
+      const base = j.kind === 'corridor' ? 'corr' : 'room', taken = new Set(P.rooms.map(r => r.id));
+      let n = 1; while ([...taken].some(id => id === `${base}${n}` || id.startsWith(`${base}${n}_`))) n++;
+      const gid = `${base}${n}`, ceil = P.rooms[0]?.ceiling_z ?? 2.7;
+      const made = j.rooms.map((x, i) => ({
+        id: j.rooms.length > 1 ? `${gid}_${i + 1}` : gid, name: j.kind === 'corridor' ? '복도' : '', floor_z: 0, ceiling_z: ceil,
+        kind: 'box', cx: r3(x.box.center[0] + P.off[0]), cy: r3(x.box.center[1] + P.off[1]), w: x.box.size[0], d: x.box.size[1], yaw: 0 }));
+      const dt = new Set(P.doors.map(d => d.id));
+      for (let a = 0; a < made.length; a++) for (let b = a + 1; b < made.length; b++) {
+        let k = 1; while (dt.has(`${gid}_door${k}`)) k++;
+        const d = sharedDoor(made[a], made[b], `${gid}_door${k}`); if (d) { P.doors.push(d); dt.add(d.id); }
+      }
+      for (const r of made) { P.rooms.push(r); P.items[r.id] = { group: gid, kind: j.kind, conf: j.conf }; }
+      P.sel = made[0]?.id ?? null;
+      view.redraw(); previewPanel();
+      toast(`영역 추가: ${gid} (${j.kind === 'corridor' ? '복도' : '방'}, 박스 ${made.length}개, 믿음 ${Math.round(j.conf * 100)}%)`);
+    } catch (e) { toast(e.message, true); }
+    finally { P.busy = false; }
   }
 
   async function rescale(measured, real) {

@@ -5,6 +5,7 @@
 3. 방 후보: 벽 마스크에서 글자·기호(작은 덩어리)를 지우고, 문 폭만큼 닫아 방을 나눈 뒤
    바깥과 이어지지 않은 빈 공간 덩어리 -> 다각형 (벽 안쪽 치수)
 
+기본(method="segment")은 plan_segment 영역 분할(복도·방 박스, 문, 믿음)이고 위 2·3 은 method="binary"(예전 방식).
 완전 자동이 목표가 아니다. 결과는 사람이 박스 편집기에서 고칠 초안이다.
 """
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import geom
 from .draft import DraftOptions, DraftResult, build_draft
 from .geom import Pt, Seg
 
@@ -175,11 +177,13 @@ def detect_rooms(img: np.ndarray, px_per_m: float, *, door_close_m: float = 1.1,
 
 def import_image(image, opts: DraftOptions | None = None, *, corners=None, size_m: tuple[float, float] | None = None,
                  px_per_m: float = 50.0, door_close_m: float = 1.1, min_len_m: float = 0.5,
-                 adaptive_block_m: float | None = None) -> DraftResult:
+                 adaptive_block_m: float | None = None, method: str = "segment", seg_opts=None) -> DraftResult:
     """도면 사진(경로 또는 BGR 배열) -> DraftResult.
 
     corners·size_m 을 주면 원근 보정 후 px_per_m 로 다시 그림. 안 주면 이미지가 이미 위에서 본 것이고
-    px_per_m 이 그 이미지 축척이어야 함. extra: rectified(보정 이미지), homography, segments_px 없음.
+    px_per_m 이 그 이미지 축척이어야 함. extra: rectified(보정 이미지), homography, wall_mask.
+    method="segment"(기본): plan_segment 영역 분할 -> 복도(ㄱ·T 는 여러 박스)·방 박스 + 문 + 믿음(extra["items"]).
+    method="binary": 예전 방식 (이진화 빈 공간 덩어리 -> 다각형).
     """
     opts = opts or DraftOptions(boxes=True)
     img = read_image(image) if isinstance(image, (str, Path)) else image
@@ -189,6 +193,10 @@ def import_image(image, opts: DraftOptions | None = None, *, corners=None, size_
         if size_m is None:
             raise ValueError("corners 를 주면 size_m(실제 가로, 세로 m)도 필요")
         img, Hm = rectify(img, corners, size_m, px_per_m)
+    if method == "segment":
+        return _import_segment(img, Hm, opts, corners, size_m, px_per_m, seg_opts, min_len_m)
+    if method != "binary":
+        raise ValueError(f"모르는 method: {method}")
     mask = wall_mask(img, adaptive_block_m, px_per_m)
     mask = _drop_small_blobs(mask, min_len_m * px_per_m)
     segs = detect_segments(img, px_per_m, min_len_m=min_len_m, mask=mask)
@@ -205,4 +213,89 @@ def import_image(image, opts: DraftOptions | None = None, *, corners=None, size_
     res = build_draft(rooms, [], draft_opts, source, warnings)
     res.segments = segs
     res.extra.update({"rectified": img, "homography": Hm, "wall_mask": mask})
+    return res
+
+
+def _source(px_per_m, corners, size_m, method):
+    source = {"kind": "image", "px_per_m": px_per_m, "method": method}
+    if corners is not None:
+        source["corners"] = [[float(x), float(y)] for x, y in order_corners(corners)]
+        source["size_m"] = [float(size_m[0]), float(size_m[1])]
+    return source
+
+
+def items_to_model(items, doors, h_px: int, ppm: float, source: dict, ceiling_z: float):
+    """plan_segment Item 들 -> SpaceModel (박스 방) + 항목 목록 [{id, kind, conf, rooms, info}]."""
+    from .model import SpaceModel
+    from .plan_segment import px_box_to_m
+    order = sorted(range(len(items)), key=lambda k: (items[k].kind != "corridor",
+                                                    -round(geom.centroid(_box_poly(items[k].boxes[0], h_px, ppm))[1] / 2),
+                                                    geom.centroid(_box_poly(items[k].boxes[0], h_px, ppm))[0]))
+    m = SpaceModel(source)
+    meta, ids_of = [], {}
+    nc = nr = 0
+    for k in order:
+        it = items[k]
+        if it.kind == "corridor":
+            nc += 1; base, name = f"corr{nc}", "복도"
+        else:
+            nr += 1; base, name = f"room{nr}", ""
+        rids = []
+        for j, b in enumerate(it.boxes):
+            x0, y0, x1, y1 = px_box_to_m(b, h_px, ppm)
+            rid = base if len(it.boxes) == 1 else f"{base}_{j + 1}"
+            m.add_box_room(((x0 + x1) / 2, (y0 + y1) / 2), (x1 - x0, y1 - y0), id=rid, name=name, ceiling_z=ceiling_z)
+            rids.append(rid)
+        for a in range(len(rids)):            # 한 영역 박스끼리 = 벽 없는 통로
+            for b in range(a + 1, len(rids)):
+                try:
+                    m.connect(rids[a], rids[b], width=100.0, tol=0.05)
+                except ValueError:
+                    pass
+        ids_of[k] = rids
+        meta.append({"id": base, "kind": it.kind, "conf": it.conf, "rooms": rids, "info": it.info})
+    for cx, cy, w, a, b in doors:
+        p = ((cx + 0.5) / ppm, (h_px - cy - 0.5) / ppm)
+        pick = []
+        for k in (a, b):
+            best = min(ids_of[k], key=lambda rid: geom.dist_to_boundary(p, m.room(rid).floor))
+            pick.append(best)
+        try:
+            m.add_door(p, width=round(min(max(w / ppm, 0.7), 2.0), 2), rooms=pick, snap=True)
+        except ValueError:
+            pass
+    return m, meta
+
+
+def _box_poly(b, h_px, ppm):
+    from .plan_segment import px_box_to_m
+    x0, y0, x1, y1 = px_box_to_m(b, h_px, ppm)
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
+def _import_segment(img, Hm, opts, corners, size_m, px_per_m, seg_opts, min_len_m) -> DraftResult:
+    from . import plan_segment as ps
+    so = seg_opts or ps.SegOptions(min_room_m2=max(opts.min_area, 0.5) * 2)
+    seg = ps.segment(img, px_per_m, so)
+    prep = seg["prep"]
+    h = img.shape[0]
+    m, meta = items_to_model(seg["items"], seg["doors"], h, px_per_m, _source(px_per_m, corners, size_m, "segment"),
+                             opts.ceiling_z)
+    warnings = []
+    nc = sum(1 for x in meta if x["kind"] == "corridor")
+    warnings.append(f"영역 분할: 복도 {nc}개 · 방 {len(meta) - nc}개 · 문 {len(m.doors)}개"
+                    + (" (복도 색으로 구분)" if seg["colour_mode"] else " (복도 색 없음: 모양으로 구분)"))
+    d = seg["dropped"]
+    if d["hatch"]:
+        warnings.append(f"빗금·계단 칸 {d['hatch']}개 뺌 (필요하면 '클릭해서 영역 추가')")
+    low = [x["id"] for x in meta if x["conf"] < 0.6]
+    if low:
+        warnings.append(f"믿음 낮음 (확인할 것): {', '.join(low)}")
+    if not meta:
+        warnings.append("영역을 못 찾음: 네 점·축척(px/m)을 확인하거나 '클릭해서 영역 추가'로 하나씩")
+    # 밑그림 선분은 닫힌 잉크에서 (예전 방식과 같은 선 검출)
+    segs = detect_segments(img, px_per_m, min_len_m=min_len_m, mask=(prep.ink * 255).astype(np.uint8))
+    res = DraftResult(m, warnings, segs, [])
+    res.extra.update({"rectified": img, "homography": Hm, "wall_mask": (prep.closed * 255).astype(np.uint8),
+                      "items": meta, "seg": seg})
     return res

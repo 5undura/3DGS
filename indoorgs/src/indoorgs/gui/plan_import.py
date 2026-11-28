@@ -153,10 +153,16 @@ def _import(kind: str, src: Path, dopt: DraftOptions, opt: dict, out: dict):
         size_m = (_pos(float(size_m[0]), "가로"), _pos(float(size_m[1]), "세로"))
         if size_m[0] * ppm * size_m[1] * ppm > 40e6:
             raise ImportError_("보정 이미지가 너무 큼 (px_per_m 를 줄일 것)")
+    method = opt.get("method", "segment")
+    if method not in ("segment", "binary"):
+        raise ImportError_("method 는 segment 또는 binary")
     try:
-        res = space.import_image(src, dopt, corners=corners, size_m=size_m, px_per_m=ppm)
+        res = space.import_image(src, dopt, corners=corners, size_m=size_m, px_per_m=ppm, method=method)
     except ValueError as e:
         raise ImportError_(str(e)) from e
+    if "items" in res.extra:
+        out["items"] = res.extra["items"]
+        _remember(src, corners, size_m, ppm, res.extra["rectified"], res.extra["seg"]["prep"])
     img = res.extra["rectified"]
     ok, buf = cv2.imencode(".png", img)
     if not ok:
@@ -174,6 +180,67 @@ def _import(kind: str, src: Path, dopt: DraftOptions, opt: dict, out: dict):
     else:
         out["rectified_png"] = "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode()
     return res
+
+
+# ---------- 마법봉: 보정 이미지·준비물 기억 (최근 4개) ----------
+_CACHE: dict[tuple, tuple] = {}
+
+
+def _key(src: Path, corners, size_m, ppm) -> tuple:
+    c = tuple(tuple(round(float(v), 2) for v in p) for p in corners) if corners is not None else None
+    s = tuple(round(float(v), 4) for v in size_m) if (corners is not None and size_m is not None) else None
+    return (str(src.resolve()), src.stat().st_mtime_ns, c, s, round(float(ppm), 4))
+
+
+def _remember(src, corners, size_m, ppm, img, prep):
+    k = _key(Path(src), corners, size_m, ppm)
+    _CACHE[k] = (img, prep)
+    while len(_CACHE) > 4:
+        _CACHE.pop(next(iter(_CACHE)))
+
+
+def run_wand(floorplan: Path, opt: dict[str, Any]) -> dict:
+    """opt: source_file(floorplan/source/이름), corners, size_m, px_per_m, point [x, y] m(보정 도면 좌표), tol.
+    돌려줌: {kind, conf, info, rooms:[{id 없음, box}], polygon(m)}. 방 id 는 GUI 가 붙임."""
+    import cv2
+    import numpy as np
+    from ..space import image_import, plan_segment as ps
+    name = safe_name(str(opt.get("source_file") or "").split("/")[-1])
+    src = floorplan / "source" / name
+    if not src.exists() or kind_of(name) != "image":
+        raise ImportError_(f"사진 원본 없음: {name} (먼저 초안을 만들 것)")
+    ppm = _pos(opt.get("px_per_m"), "px_per_m") or 50.0
+    corners, size_m = opt.get("corners"), opt.get("size_m")
+    if corners is not None and (len(corners) != 4 or size_m is None or len(size_m) != 2):
+        raise ImportError_("사진: 네 모서리 점과 실제 크기(가로, 세로 m)가 필요")
+    pt = opt.get("point")
+    if not (isinstance(pt, (list, tuple)) and len(pt) == 2):
+        raise ImportError_("point [x, y] (m) 가 필요")
+    tol = float(opt.get("tol", 18.0))
+    k = _key(src, corners, size_m, ppm)
+    if k in _CACHE:
+        img, prep = _CACHE[k]
+    else:
+        img = image_import.read_image(src)
+        if corners is not None:
+            img, _ = image_import.rectify(img, corners, (float(size_m[0]), float(size_m[1])), ppm)
+        prep = ps.prepare(img, ppm)
+        _remember(src, corners, size_m, ppm, img, prep)
+    h = img.shape[0]
+    px = (float(pt[0]) * ppm - 0.5, h - float(pt[1]) * ppm - 0.5)
+    try:
+        it = ps.magic_wand(prep, px, tol)
+    except ValueError as e:
+        raise ImportError_(str(e)) from e
+    rooms = []
+    for b in it.boxes:
+        x0, y0, x1, y1 = ps.px_box_to_m(b, h, ppm)
+        rooms.append({"box": {"center": [round((x0 + x1) / 2, 4), round((y0 + y1) / 2, 4)],
+                              "size": [round(x1 - x0, 4), round(y1 - y0, 4)], "yaw_deg": 0.0}})
+    cs, _ = cv2.findContours(it.mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    c = cv2.approxPolyDP(max(cs, key=cv2.contourArea), max(1.0, 0.1 * ppm), True).reshape(-1, 2)
+    poly = [[round((x + 0.5) / ppm, 3), round((h - y - 0.5) / ppm, 3)] for x, y in c]
+    return {"kind": it.kind, "conf": it.conf, "info": it.info, "rooms": rooms, "polygon": poly}
 
 
 def validate_plan(data: dict) -> list[dict]:

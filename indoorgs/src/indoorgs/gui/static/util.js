@@ -27,7 +27,7 @@ const THEME_VARS = {
   room: 'cv-room', roomDim: 'cv-room-dim', roomFill: 'cv-room-fill', roomFillDim: 'cv-room-fill-dim',
   label: 'cv-label', labelDim: 'cv-label-dim', sel: 'cv-sel', selFill: 'cv-sel-fill', handle: 'cv-handle',
   door: 'cv-door', route: 'cv-route', anchor: 'cv-anchor', anchorTxt: 'cv-anchor-txt', cursor: 'cv-cursor',
-  draft: 'cv-draft', scale: 'cv-scale', bg3d: 'cv-3d-bg', wall3d: 'cv-3d-wall', floor3d: 'cv-3d-floor', edge3d: 'cv-3d-edge',
+  draft: 'cv-draft', draftCorr: 'cv-draft-corr', draftLow: 'cv-draft-low', scale: 'cv-scale', bg3d: 'cv-3d-bg', wall3d: 'cv-3d-wall', floor3d: 'cv-3d-floor', edge3d: 'cv-3d-edge',
   text: 'txt', mute: 'mute', bad: 'bad', ok: 'ok', warn: 'warn', acc: 'acc',
 };
 const FALLBACK = { bg: '#1d1d1d', text: '#d0d0d0', sel: '#5a88cc', door: '#e8a33d', route: '#4cc9f0' };

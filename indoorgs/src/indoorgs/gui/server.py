@@ -5,6 +5,7 @@ API (모두 /api 아래)
   GET  plan / PUT plan              floorplan/plan.json (잘못되면 400 + 한국어 메시지)
   GET  plan/image                   floorplan/plan.png
   POST plan/import                  도면 업로드(.dxf .svg 사진) -> 초안 (plan.json 은 안 씀)
+  POST plan/wand                    사진 초안에서 한 점 -> 그 영역 박스 (마법봉, plan.json 은 안 씀)
   GET  plan/validate / POST         저장된(또는 보낸) plan 검사 -> issues
   GET  sections/{name}/path / PUT   sections/<name>/path.json
   GET  sections/{name}/video        project.yaml 의 영상 (Range 지원)
@@ -214,6 +215,15 @@ def create_app(project_root: str | Path) -> FastAPI:
             raise HTTPException(400, str(e))
         except (TypeError, ValueError) as e:
             raise HTTPException(400, f"옵션 오류: {e}")
+
+    @app.post("/api/plan/wand")
+    def plan_wand(data: dict = Body(...)):
+        try:
+            return plan_import.run_wand(proj().plan_json.parent, data)
+        except plan_import.ImportError_ as e:
+            raise HTTPException(400, str(e)) from e
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f"옵션 오류: {e}") from e
 
     @app.get("/api/plan/image")
     def plan_image():
