@@ -63,6 +63,9 @@ def main(argv=None):
         ("snap_move_only", raw, sn(remove_behind=False, flatten=False)),
         ("snap_flatten_only", raw, sn(remove_behind=False, move=False)),
         ("snap_no_color", raw, sn(color_tol=None)),
+        ("snap_count_color", raw, sn(color_weighting="count")),          # 예전 색 기준 (버그 1) 비교용
+        ("snap_tex_color", raw, lambda src, dst: sn(color_texture=facetex.load_textures(tex_dir, trusted))(src, dst)),
+        ("snap_move_only_count_color", raw, sn(remove_behind=False, flatten=False, color_weighting="count")),
         # cleanup 단계 하나씩 (raw 에서, snap 없이)
         ("clean_floaters", raw, cl(("floaters",))),
         ("clean_floaters_nomodel", raw, cl(("floaters",), model=None)),
@@ -75,6 +78,8 @@ def main(argv=None):
         ("repair_raw", raw, rp()),
         ("repair_tex_raw", raw, rp(tex=True)),
         ("repair_tex_zero_raw", raw, rp(tex=True, texture_rest="zero")),
+        ("repair_raw_noray", raw, rp(ray_check=False)),                  # 예전 덮임 (버그 5) 비교용
+        ("repair_tex_raw_noray", raw, rp(tex=True, ray_check=False)),
     ]
     if a.only:
         keep = set(a.only.split(","))

@@ -14,6 +14,7 @@ GPU 가 없는 곳에서 **벽 평탄화(walls/refine·seed·snap) 같은 변경
 ```bash
 PY=.../scratchpad/venv/bin/python        # torch CPU
 $PY train.py --model <.../sparse/1> --images <사진 폴더> --out <결과> --iters 1500 --res 200 [--init <점 모델 폴더|PLY>]
+$PY train.py ... --init-ply <학습된/고친 PLY> --iters 1000 --checkpoints 300,600   # 이어 학습 (fine-tune: 밀도 조절 없음, means lr 끝 값)
 $PY toyroom.py --out <폴더> --iters 1500 --res 200          # 확인 실행
 ```
 

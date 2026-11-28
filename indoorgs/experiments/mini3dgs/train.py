@@ -508,7 +508,8 @@ def train(model_dir, image_dir, out_dir, iters: int = 3000, res: int = 200, init
         "time": {"train_s": round(train_s, 1), "s_per_iter": round(train_s / iters, 4),
                  "total_s": round(time.time() - t0, 1)},
         "scene": {**scene.info, "extent": scene.extent, "n_train": len(scene.train), "n_test": len(scene.test)},
-        "options": {k: (list(v) if isinstance(v, tuple) else v) for k, v in o.items()},
+        "options": {k: (list(v) if isinstance(v, tuple) else v) for k, v in o.items() if k != "flat_planes"},
+        "n_flat_planes": len(o["flat_planes"] or []),
         "history": hist,
     }
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=1, ensure_ascii=False), encoding="utf-8")

@@ -59,7 +59,7 @@ def load_ctx(S: Path):
     d = json.loads((S / "planes.json").read_text(encoding="utf-8"))
     planes = [wp.plane_from_json(q) for q in d["planes"]]
     fit = {f["id"]: f for f in d["fit"]}
-    trusted = [p for p in planes if fit[p.id]["source"] == "fit"]
+    trusted = [p for p in planes if fit[p.id]["source"] in ("fit", "infer")]
     plan = schemas.load_plan(S / "scene" / "plan.json")
     model = cm.read_model(S / "scene" / "sparse" / "0")
     cams = np.array([im.center for im in model.images.values()])
