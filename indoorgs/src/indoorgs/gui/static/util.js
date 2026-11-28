@@ -20,3 +20,24 @@ export function toast(msg, err = false) {
   t.textContent = msg; t.className = `toast show ${err ? 'err' : 'ok'}`;
   clearTimeout(tid); tid = setTimeout(() => t.classList.remove('show'), err ? 6000 : 2500);
 }
+
+// 테마 색: style.css 의 --cv-* 등 CSS 변수를 한 번 읽어 캔버스·SVG·three.js 가 같이 씀
+const THEME_VARS = {
+  bg: 'cv-bg', grid: 'cv-grid', gridMajor: 'cv-grid-major', axisX: 'cv-axis-x', axisY: 'cv-axis-y',
+  room: 'cv-room', roomDim: 'cv-room-dim', roomFill: 'cv-room-fill', roomFillDim: 'cv-room-fill-dim',
+  label: 'cv-label', labelDim: 'cv-label-dim', sel: 'cv-sel', selFill: 'cv-sel-fill', handle: 'cv-handle',
+  door: 'cv-door', route: 'cv-route', anchor: 'cv-anchor', anchorTxt: 'cv-anchor-txt', cursor: 'cv-cursor',
+  draft: 'cv-draft', scale: 'cv-scale', bg3d: 'cv-3d-bg', wall3d: 'cv-3d-wall', floor3d: 'cv-3d-floor', edge3d: 'cv-3d-edge',
+  text: 'txt', mute: 'mute', bad: 'bad', ok: 'ok', warn: 'warn', acc: 'acc',
+};
+const FALLBACK = { bg: '#1d1d1d', text: '#d0d0d0', sel: '#5a88cc', door: '#e8a33d', route: '#4cc9f0' };
+let themeCache = null;
+export const T = new Proxy({}, {
+  get(_, k) {
+    if (!themeCache) {
+      const cs = getComputedStyle(document.documentElement);
+      themeCache = Object.fromEntries(Object.entries(THEME_VARS).map(([n, v]) => [n, cs.getPropertyValue('--' + v).trim()]));
+    }
+    return themeCache[k] || FALLBACK[k] || '#888';
+  },
+});

@@ -1,9 +1,8 @@
 // 공간 화면: 도면 불러오기 (DXF · SVG · 사진) -> 초안 미리보기 -> 바꾸기 / 추가하기 / 취소
-import { toast, $, esc } from './util.js';
+import { toast, $, esc, T } from './util.js';
 import { fromJson, roomPoly, snap, r3 } from './model.js';
 
 const KIND = { dxf: 'dxf', svg: 'svg', png: 'image', jpg: 'image', jpeg: 'image', bmp: 'image', webp: 'image', tif: 'image', tiff: 'image' };
-const DRAFT = '#7c3aed';
 
 export function initImport(ctx) {
   const { S, view, state } = ctx;
@@ -117,9 +116,9 @@ export function initImport(ctx) {
   function drawCorners() {
     const img = $('#space-photo-img'), k = (img.naturalWidth || 1000) / 250, c = cur.corners;
     let s = '';
-    if (c.length === 4) s += `<polygon points="${ordered(c).map(p => p.join(',')).join(' ')}" fill="rgba(37,99,235,.12)" stroke="#2563eb" stroke-width="${k / 2}"/>`;
-    s += c.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="${k * 1.6}" fill="#fff" stroke="#2563eb" stroke-width="${k / 2}"/>
-      <text x="${p[0] + k * 2.5}" y="${p[1] - k * 2}" font-size="${k * 5}" fill="#2563eb">${i + 1}</text>`).join('');
+    if (c.length === 4) s += `<polygon points="${ordered(c).map(p => p.join(',')).join(' ')}" fill="${T.selFill}" stroke="${T.sel}" stroke-width="${k / 2}"/>`;
+    s += c.map((p, i) => `<circle cx="${p[0]}" cy="${p[1]}" r="${k * 1.6}" fill="${T.anchor}" stroke="${T.sel}" stroke-width="${k / 2}"/>
+      <text x="${p[0] + k * 2.5}" y="${p[1] - k * 2}" font-size="${k * 5}" fill="${T.sel}" stroke="${T.bg}" stroke-width="${k / 3}" paint-order="stroke">${i + 1}</text>`).join('');
     $('#space-photo-svg').innerHTML = s;
     photoMsg();
   }
@@ -148,22 +147,22 @@ export function initImport(ctx) {
   }
   function draw(g) {
     const P = S.preview;
-    g.strokeStyle = 'rgba(124,58,237,.55)'; g.lineWidth = 1; g.beginPath();
+    g.strokeStyle = T.draft; g.globalAlpha = .55; g.lineWidth = 1; g.beginPath();
     for (const [a, b] of P.segs) { g.moveTo(view.sx(a[0]), view.sy(a[1])); g.lineTo(view.sx(b[0]), view.sy(b[1])); }
-    g.stroke();
+    g.stroke(); g.globalAlpha = 1;
     g.setLineDash([5, 3]);
     for (const r of P.rooms) {
       const pts = roomPoly(r);
-      view.poly(pts); g.fillStyle = 'rgba(124,58,237,.12)'; g.fill();
-      g.lineWidth = 1.5; g.strokeStyle = DRAFT; g.stroke();
+      view.poly(pts); g.fillStyle = T.draft; g.globalAlpha = .12; g.fill(); g.globalAlpha = 1;
+      g.lineWidth = 1.5; g.strokeStyle = T.draft; g.stroke();
       const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length, cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
-      g.fillStyle = DRAFT; g.font = '11px system-ui'; g.textAlign = 'center';
+      g.fillStyle = T.draft; g.font = '11px system-ui'; g.textAlign = 'center';
       g.fillText(r.id, view.sx(cx), view.sy(cy));
     }
     g.setLineDash([]);
     const ms = P.measure;
     if (ms?.length) {
-      g.strokeStyle = '#dc2626'; g.fillStyle = '#dc2626'; g.lineWidth = 2; g.beginPath();
+      g.strokeStyle = T.cursor; g.fillStyle = T.cursor; g.lineWidth = 2; g.beginPath();
       ms.forEach((p, i) => i ? g.lineTo(view.sx(p[0]), view.sy(p[1])) : g.moveTo(view.sx(p[0]), view.sy(p[1])));
       g.stroke();
       for (const p of ms) { g.beginPath(); g.arc(view.sx(p[0]), view.sy(p[1]), 4, 0, 7); g.fill(); }

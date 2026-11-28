@@ -2,11 +2,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { roomPoly } from './model.js';
+import { T } from './util.js';
 
 export async function createPreview(wrap) {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.setClearColor(0xffffff);
+  renderer.setClearColor(new THREE.Color(T.bg3d));
   wrap.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 500);
@@ -17,10 +18,10 @@ export async function createPreview(wrap) {
   let group = new THREE.Group(); scene.add(group);
   let first = true;
 
-  const wallMat = new THREE.MeshLambertMaterial({ color: 0xe4e4e7, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
-  const floorMat = new THREE.MeshLambertMaterial({ color: 0xf4f4f5, side: THREE.DoubleSide });
-  const lineMat = new THREE.LineBasicMaterial({ color: 0x52525b });
-  const doorMat = new THREE.LineBasicMaterial({ color: 0xf59e0b });
+  const wallMat = new THREE.MeshLambertMaterial({ color: T.wall3d, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false });
+  const floorMat = new THREE.MeshLambertMaterial({ color: T.floor3d, side: THREE.DoubleSide });
+  const lineMat = new THREE.LineBasicMaterial({ color: T.edge3d });
+  const doorMat = new THREE.LineBasicMaterial({ color: T.door });
 
   function resize() {
     const w = wrap.clientWidth, h = wrap.clientHeight;

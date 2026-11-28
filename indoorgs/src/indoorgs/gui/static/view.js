@@ -1,7 +1,6 @@
 // 위에서 본 도면 캔버스: 좌표 변환, 격자, 확대·이동, 방 그리기. 도면 좌표: x 오른쪽, y 위쪽 (미터)
 import { roomPoly } from './model.js';
-
-export const ACC = '#2563eb';
+import { T } from './util.js';
 
 export class PlanView {
   constructor(canvas) {
@@ -88,7 +87,7 @@ export class PlanView {
     const y0 = Math.floor((this.oy - this.h) / s / step) * step, y1 = this.oy / s;
     g.lineWidth = 1;
     for (let pass = 0; pass < 2; pass++) {
-      g.strokeStyle = pass ? '#e4e4e7' : '#f4f4f5';
+      g.strokeStyle = pass ? T.gridMajor : T.grid;
       g.beginPath();
       for (let x = x0; x <= x1; x += step) {
         const isMajor = Math.abs(x / major - Math.round(x / major)) < 1e-6;
@@ -102,12 +101,13 @@ export class PlanView {
       }
       g.stroke();
     }
-    // 원점 축
-    g.strokeStyle = '#d4d4d8'; g.beginPath();
-    g.moveTo(this.sx(0) + .5, 0); g.lineTo(this.sx(0) + .5, this.h); g.moveTo(0, this.sy(0) + .5); g.lineTo(this.w, this.sy(0) + .5); g.stroke();
+    // 원점 축 (Blender 처럼 X 빨강, Y 초록)
+    const ax = Math.round(this.sx(0)) + .5, ay = Math.round(this.sy(0)) + .5;
+    g.strokeStyle = T.axisX; g.beginPath(); g.moveTo(0, ay); g.lineTo(this.w, ay); g.stroke();
+    g.strokeStyle = T.axisY; g.beginPath(); g.moveTo(ax, 0); g.lineTo(ax, this.h); g.stroke();
     // 축척
     const len = [0.5, 1, 2, 5, 10, 20].find(v => v * s >= 60) || 50;
-    g.fillStyle = '#3f3f46'; g.fillRect(this.w - 20 - len * s, this.h - 22, len * s, 2);
+    g.fillStyle = T.scale; g.fillRect(this.w - 20 - len * s, this.h - 22, len * s, 2);
     g.font = '11px system-ui'; g.textAlign = 'right'; g.fillText(`${len} m`, this.w - 20, this.h - 28);
   }
   poly(pts) {
@@ -121,11 +121,11 @@ export class PlanView {
     for (const r of rooms) {
       const pts = roomPoly(r), sel = r === opt.selected;
       this.poly(pts);
-      g.fillStyle = sel ? 'rgba(37,99,235,.08)' : opt.dim ? 'rgba(244,244,245,.6)' : 'rgba(244,244,245,.85)';
+      g.fillStyle = sel ? T.selFill : opt.dim ? T.roomFillDim : T.roomFill;
       g.fill();
-      g.lineWidth = sel ? 2 : 1.5; g.strokeStyle = sel ? ACC : opt.dim ? '#a1a1aa' : '#52525b'; g.stroke();
+      g.lineWidth = sel ? 2 : 1.5; g.strokeStyle = sel ? T.sel : opt.dim ? T.roomDim : T.room; g.stroke();
       const cx = pts.reduce((a, p) => a + p[0], 0) / pts.length, cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
-      g.fillStyle = opt.dim ? '#a1a1aa' : '#52525b'; g.font = '12px system-ui'; g.textAlign = 'center';
+      g.fillStyle = sel ? T.sel : opt.dim ? T.labelDim : T.label; g.font = '12px system-ui'; g.textAlign = 'center';
       g.fillText(r.name || r.id, this.sx(cx), this.sy(cy));
     }
   }
@@ -144,9 +144,9 @@ export class PlanView {
       }
     }
     const h = d.width / 2, [cx, cy] = d.center;
-    g.lineCap = 'butt'; g.lineWidth = 6; g.strokeStyle = '#fff';
+    g.lineCap = 'butt'; g.lineWidth = 6; g.strokeStyle = T.bg;
     g.beginPath(); g.moveTo(this.sx(cx - dir[0] * h), this.sy(cy - dir[1] * h)); g.lineTo(this.sx(cx + dir[0] * h), this.sy(cy + dir[1] * h)); g.stroke();
-    g.lineWidth = sel ? 4 : 3; g.strokeStyle = sel ? ACC : '#f59e0b'; g.stroke();
+    g.lineWidth = sel ? 4 : 3; g.strokeStyle = sel ? T.sel : T.door; g.stroke();
     for (const k of [-1, 1]) {
       const ex = cx + k * dir[0] * h, ey = cy + k * dir[1] * h;
       g.lineWidth = 1.5; g.beginPath();

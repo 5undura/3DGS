@@ -1,7 +1,7 @@
 // 공간 화면: 박스 방 편집 (추가·이동·크기·회전), 문, 도면 이미지 배경, 3D 미리보기
-import { api, toast, $, esc } from './util.js';
+import { api, toast, $, esc, T } from './util.js';
 import { fromJson, toJson, roomPoly, boxFloor, snap, r3, pointInPoly, nearestWall } from './model.js';
-import { PlanView, ACC } from './view.js';
+import { PlanView } from './view.js';
 import { initImport } from './planimport.js';
 
 const RAD = Math.PI / 180;
@@ -23,19 +23,19 @@ export function initSpace(state) {
     for (const d of m.doors) { const r = roomOf(d.rooms[0]); view.door(d, r && roomPoly(r), S.sel?.obj === d); }
     if (S.sel?.type === 'room' && S.sel.obj.kind === 'box') {
       const r = S.sel.obj, pts = boxFloor(r), rh = rotHandle(r);
-      g.strokeStyle = ACC; g.lineWidth = 1;
+      g.strokeStyle = T.handle; g.lineWidth = 1;
       g.beginPath(); g.moveTo(view.sx(r.cx), view.sy(r.cy)); g.lineTo(view.sx(rh[0]), view.sy(rh[1])); g.setLineDash([3, 3]); g.stroke(); g.setLineDash([]);
-      g.fillStyle = '#fff';
+      g.fillStyle = T.bg; g.lineWidth = 1.5;
       for (const [x, y] of pts) { g.beginPath(); g.rect(view.sx(x) - HANDLE, view.sy(y) - HANDLE, HANDLE * 2, HANDLE * 2); g.fill(); g.stroke(); }
       g.beginPath(); g.arc(view.sx(rh[0]), view.sy(rh[1]), HANDLE, 0, 7); g.fill(); g.stroke();
       // 치수
-      g.fillStyle = ACC; g.font = '11px system-ui'; g.textAlign = 'center';
+      g.fillStyle = T.sel; g.font = '11px system-ui'; g.textAlign = 'center';
       g.fillText(`${r.w.toFixed(2)} × ${r.d.toFixed(2)} m${r.yaw ? ` · ${r.yaw.toFixed(1)}°` : ''}`, view.sx(r.cx), view.sy(r.cy) + 16);
     }
     if (S.preview) S.preview.draw(g);
     if (S.hoverWall) {
       const { q } = S.hoverWall;
-      g.fillStyle = ACC; g.beginPath(); g.arc(view.sx(q[0]), view.sy(q[1]), 4, 0, 7); g.fill();
+      g.fillStyle = T.door; g.beginPath(); g.arc(view.sx(q[0]), view.sy(q[1]), 4, 0, 7); g.fill();
     }
   };
 

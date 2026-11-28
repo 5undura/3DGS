@@ -22,6 +22,10 @@ async function main() {
   path.open();
   initRun();
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
+  // 오른쪽 패널 제목 누르면 아래 칸 접기 (Blender 속성 패널처럼)
+  document.querySelectorAll('.side > h3').forEach(h => h.onclick = () => {
+    h.classList.toggle('closed'); h.nextElementSibling?.classList.toggle('fold', h.classList.contains('closed'));
+  });
   const fromHash = () => { const [h, sub] = location.hash.slice(1).split(':'); show(TABS.includes(h) ? h : 'project', sub); };
   window.addEventListener('hashchange', fromHash);
   fromHash();

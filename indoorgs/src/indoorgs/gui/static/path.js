@@ -1,7 +1,7 @@
 // 동선 화면: 브러시로 선 그리기, 영상 보며 고정점 찍기. 형식은 CONTRACT.md 4절 path.json
-import { api, toast, $, esc } from './util.js';
+import { api, toast, $, esc, T } from './util.js';
 import { roomPoly, r3, Polyline } from './model.js';
-import { PlanView, ACC } from './view.js';
+import { PlanView } from './view.js';
 
 const MIN_STEP = 0.15;     // 브러시 점 간격 (m)
 
@@ -38,25 +38,25 @@ export function initPath(state) {
     for (const d of doors) { const r = rooms.find(x => x.id === d.rooms[0]); view.door(d, r && roomPoly(r)); }
     const st = P.data.stroke, pl = line();
     if (st && st.length) {
-      g.strokeStyle = ACC; g.lineWidth = 3; g.lineJoin = g.lineCap = 'round';
+      g.strokeStyle = T.route; g.lineWidth = 3; g.lineJoin = g.lineCap = 'round';
       g.beginPath(); st.forEach(([x, y], i) => i ? g.lineTo(view.sx(x), view.sy(y)) : g.moveTo(view.sx(x), view.sy(y))); g.stroke();
       // 시작 표시
-      g.fillStyle = ACC; g.beginPath(); g.arc(view.sx(st[0][0]), view.sy(st[0][1]), 5, 0, 7); g.fill();
+      g.fillStyle = T.route; g.beginPath(); g.arc(view.sx(st[0][0]), view.sy(st[0][1]), 5, 0, 7); g.fill();
     }
     const order = sortedIdx();
     order.forEach((i, k) => {
       const a = P.data.anchors[i], p = anchorPos(a, pl); if (!p) return;
       const X = view.sx(p.q[0]), Y = view.sy(p.q[1]), sel = P.selA === i;
-      g.fillStyle = '#fff'; g.strokeStyle = sel ? '#18181b' : ACC; g.lineWidth = sel ? 3 : 2;
+      g.fillStyle = T.anchor; g.strokeStyle = sel ? T.handle : T.route; g.lineWidth = sel ? 3 : 2;
       g.beginPath(); g.arc(X, Y, 8, 0, 7); g.fill(); g.stroke();
-      g.fillStyle = '#18181b'; g.font = '600 10px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = T.anchorTxt; g.font = '600 10px system-ui'; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillText(k + 1, X, Y + .5);
-      g.textBaseline = 'alphabetic'; g.font = '11px system-ui'; g.fillStyle = '#3f3f46';
+      g.textBaseline = 'alphabetic'; g.font = '11px system-ui'; g.fillStyle = T.label;
       g.fillText(`${a.t.toFixed(1)}s`, X, Y - 12);
     });
     const cur = posAt(video.currentTime || 0);
     if (cur) {
-      g.fillStyle = '#dc2626'; g.beginPath(); g.arc(view.sx(cur[0]), view.sy(cur[1]), 5, 0, 7); g.fill();
+      g.fillStyle = T.cursor; g.beginPath(); g.arc(view.sx(cur[0]), view.sy(cur[1]), 5, 0, 7); g.fill();
     }
   };
   const sortedIdx = () => P.data.anchors.map((a, i) => i).sort((i, j) => P.data.anchors[i].t - P.data.anchors[j].t);

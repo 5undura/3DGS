@@ -1,5 +1,5 @@
 // 결과 화면: 보고서 / 벽·정리 (planes.json · walls.json · clean.json · repair.json) / 면 텍스처 보기
-import { api, toast, $, esc } from './util.js';
+import { api, toast, $, esc, T } from './util.js';
 
 const BIG = 0.05;                  // 도면과 이만큼(m) 넘게 다르면 강조
 const SRC_COLOR = { 85: [34, 197, 94], 170: [245, 158, 11], 255: [168, 85, 247] };   // 사진 / 메움 / 직접 칠함
@@ -109,9 +109,9 @@ export function initResults(state) {
     const W = Math.max(200, (x1 - x0) * k), H = Math.max(140, (y1 - y0) * k);
     const X = x => ((x - x0) * k).toFixed(1), Y = y => ((y1 - y) * k).toFixed(1);
     const EX = 10;
-    const color = s => { const v = Math.abs(s || 0); return v >= BIG ? '#dc2626' : v >= 0.02 ? '#d97706' : '#16a34a'; };
+    const color = s => { const v = Math.abs(s || 0); return v >= BIG ? T.bad : v >= 0.02 ? T.warn : T.ok; };
     const planById = Object.fromEntries(plan.map(s => [s.id, s]));
-    let out = plan.map(s => `<line x1="${X(s.a[0])}" y1="${Y(s.a[1])}" x2="${X(s.b[0])}" y2="${Y(s.b[1])}" stroke="#a1a1aa" stroke-width="1.5" stroke-dasharray="5 3"><title>${esc(s.id)} 도면</title></line>`).join('');
+    let out = plan.map(s => `<line x1="${X(s.a[0])}" y1="${Y(s.a[1])}" x2="${X(s.b[0])}" y2="${Y(s.b[1])}" stroke="${T.mute}" stroke-width="1.5" stroke-dasharray="5 3"><title>${esc(s.id)} 도면</title></line>`).join('');
     for (const s of fitted) {
       const i = fitInfo[s.id], c = color(i.shift_m);
       out += `<line x1="${X(s.a[0])}" y1="${Y(s.a[1])}" x2="${X(s.b[0])}" y2="${Y(s.b[1])}" stroke="${c}" stroke-width="2.5"><title>${esc(s.id)} ${(i.shift_m * 100).toFixed(1)} cm, ${f(i.tilt_deg, 2)}°</title></line>`;
@@ -123,8 +123,8 @@ export function initResults(state) {
         out += `<text x="${X(ax)}" y="${Y(ay)}" dx="4" dy="-3" font-size="10" fill="${c}">${(i.shift_m * 100).toFixed(0)}cm</text>`;
       }
     }
-    const marks = ['dc2626', 'd97706', '16a34a'].map(c => `<marker id="arr-${c}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#${c}"/></marker>`).join('');
-    const sc = `<line x1="10" y1="${H - 10}" x2="${(10 + k).toFixed(1)}" y2="${H - 10}" stroke="#18181b" stroke-width="2"/><text x="10" y="${H - 15}" font-size="10">1 m</text>`;
+    const marks = [T.bad, T.warn, T.ok].map(c => c.slice(1)).map(c => `<marker id="arr-${c}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" fill="#${c}"/></marker>`).join('');
+    const sc = `<line x1="10" y1="${H - 10}" x2="${(10 + k).toFixed(1)}" y2="${H - 10}" stroke="${T.text}" stroke-width="2"/><text x="10" y="${H - 15}" font-size="10">1 m</text>`;
     return `<svg class="wallmap" viewBox="0 0 ${W.toFixed(0)} ${H.toFixed(0)}" width="${W.toFixed(0)}" height="${H.toFixed(0)}"><defs>${marks}</defs>${out}${sc}</svg>
       <p class="small muted">회색 점선 = 도면 벽, 색 선 = 정합 점으로 맞춘 면 (초록 &lt;2 cm · 주황 &lt;5 cm · 빨강 ≥5 cm). 화살표는 이동을 ${EX}배로 키워 그림.</p>`;
   }
