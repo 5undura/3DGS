@@ -16,6 +16,12 @@
   5) pose_prior_mapper --database_path db_verified.db -> colmap/sparse (실패하면 mapper)
   6) 가장 큰 모델을 수평 맞추고 제약에 다시 맞춤 -> colmap/sparse_aligned/0 -> image_undistorter  (mapper.done)
   기준 자세가 사진의 절반 미만이거나 검증이 실패하면 1차 결과를 그대로 씀 (경고). 1차가 실패하면 db.db 로 mapper.
+속도 (experiments/e2e_v4/SPEED.md):
+  register.pass1_stride N > 1: 2) 의 1차를 N장마다만 (--Mapper.image_list_path colmap/pass1_images.txt).
+    4) 에서 빠진 사진의 기준 자세는 같은 1차 모델 안 앞뒤 이웃으로 보간 (회전 slerp, 중심 직선, 순서 간격 2N 이하만).
+  register.pass2_mapper global: 5) 를 db_verified.db 사본(db_global.db)에 view_graph_calibrator -> global_mapper.
+    global_mapper 는 위치 제약을 안 씀 (명령줄 옵션 없음, 4.2.1 sfm/global_mapper.cc 는 끝에 Normalize) -> 좌표가 제멋대로라
+    6) 수평 맞추기(gimbal_level) + 제약에 다시 맞춤이 꼭 필요. 실패하면 pose_prior_mapper -> mapper 로.
 
 확인한 버전·출처 (2026-11-27)
 - COLMAP 4.2.1 (태그 4.2.1, 커밋 bd1fcf6 = 사용자 PC 버전과 같음) 소스 github.com/colmap/colmap
@@ -25,6 +31,12 @@
     --overwrite_priors_covariance --prior_position_std_x/y/z --use_robust_loss_on_prior_position
     --prior_position_loss_scale. use_prior_position 은 자동으로 켜짐. 끝에 모델을 priors 좌표로 맞춤
     (controllers/incremental_pipeline.cc AlignReconstructionToPosePriors) -> 결과가 도면 좌표
+  - controllers/option_manager.cc AddMapperOptions: --Mapper.image_list_path (PostParse 에서 ReadTextFileLines ->
+    mapper->image_names; util/file.cc 는 줄 앞뒤 공백 자르고 빈 줄 건너뜀). RunPosePriorMapper 는 AddMapperOptions 를 부름.
+    controllers/incremental_pipeline.cc CreateDatabaseCacheOptions: image_names 의 사진만 DB 에서 읽음
+  - exe/sfm.cc RunGlobalMapper: --database_path --image_path --output_path(필수, 있는 폴더) + GlobalMapper.*.
+    RunViewGraphCalibrator: --database_path (+ 선택 옵션). controllers/global_pipeline.cc: 초점거리 사전값이 없으면
+    view_graph_calibrator 를 먼저 돌리라고 경고
   - controllers/option_manager.cc: --ImageReader.camera_model, --ImageReader.single_camera,
     --SequentialMatching.overlap/quadratic_overlap/loop_detection/vocab_tree_path,
     --SpatialMatching.max_distance/max_num_neighbors/ignore_z (2026-11-28, 4.2.1 소스 사본 + pycolmap 4.2.1 바이너리 문자열로 확인)
@@ -54,7 +66,7 @@ CMD_MAPPER = "mapper"
 CMD_PRIOR_MAPPER = "pose_prior_mapper"          # TODO(PC에서 -h로 확인): 소스로만 확인
 CMD_UNDISTORT = "image_undistorter"
 CMD_VGC = "view_graph_calibrator"
-CMD_GLOBAL = "global_mapper"
+CMD_GLOBAL = "global_mapper"                    # TODO(PC에서 -h로 확인): 소스로만 확인 (PROGRESS.md 는 명령 있음만 확인)
 CMD_SPATIAL = "spatial_matcher"                 # TODO(PC에서 -h로 확인): 소스로만 확인
 OPT_SINGLE_CAMERA = "--ImageReader.single_camera"
 OPT_CAMERA_MODEL = "--ImageReader.camera_model"
@@ -71,6 +83,7 @@ OPT_SEQ_VOCAB = "--SequentialMatching.vocab_tree_path"
 OPT_SPA_MAX_DIST = "--SpatialMatching.max_distance"
 OPT_SPA_MAX_NN = "--SpatialMatching.max_num_neighbors"
 OPT_SPA_IGNORE_Z = "--SpatialMatching.ignore_z"
+OPT_MAPPER_IMAGE_LIST = "--Mapper.image_list_path"   # TODO(PC에서 pose_prior_mapper -h 로 확인): 4.2.1 소스로만 확인
 # priors.json 의 sigma 를 DB 에 넣으므로 공분산을 덮어쓰지 않음 (기본값도 false 이지만 명시).
 # exe/sfm.cc: bool overwrite_priors_covariance 를 AddDefaultOption 으로 등록 -> boost program_options 의 bool 값이라
 # 0/1/true/false 모두 받음 (다른 bool 옵션 --SiftExtraction.use_gpu 0 과 같은 방식)
@@ -85,6 +98,8 @@ INFO = "register.json"      # 어떤 mapper 를 썼는지 (diagnose 가 좌표�
 DB_VERIFIED = "db_verified.db"
 SPARSE_PASS1 = "sparse_pass1"
 SPARSE_ALIGNED = "sparse_aligned"
+DB_GLOBAL = "db_global.db"
+PASS1_LIST = "pass1_images.txt"
 MIN_REF_FRAC = 0.5          # 기준 자세가 사진의 이 비율 미만이면 검증 안 하고 1차 결과를 씀
 
 
@@ -123,10 +138,31 @@ def _cand_tag(rc) -> str:
 
 
 def _verify_settings(rc) -> dict:
-    """짝 검증 설정 (verify.done 에 같이 적어 두고, 바뀌면 검증부터 다시)."""
-    return {"seq_keep": rc.verify_seq_keep, "rot_tol_deg": rc.verify_rot_tol_deg,
-            "dir_tol_deg": rc.verify_dir_tol_deg, "max_far_m": rc.verify_max_far_m,
-            "gimbal_level": rc.gimbal_level}
+    """짝 검증 설정 (verify.done 에 같이 적어 두고, 바뀌면 검증부터 다시).
+    pass1_stride 는 1 이 아닐 때만 넣음 (예전 verify.done 과 지문이 같게)."""
+    d = {"seq_keep": rc.verify_seq_keep, "rot_tol_deg": rc.verify_rot_tol_deg,
+         "dir_tol_deg": rc.verify_dir_tol_deg, "max_far_m": rc.verify_max_far_m,
+         "gimbal_level": rc.gimbal_level}
+    if rc.pass1_stride != 1:
+        d["pass1_stride"] = rc.pass1_stride
+    return d
+
+
+def _pass1_tag(path: Path, rc) -> str:
+    """pass1.done 내용: priors.json 지문 (+ 1차 설정, 기본이면 안 붙임 -> 예전 pass1.done 과 같음)."""
+    t = _priors_tag(path)
+    return t if rc.pass1_stride == 1 else f"{t}|stride={rc.pass1_stride}"
+
+
+def pass1_image_list(names: list[str], stride: int) -> list[str]:
+    """1차에 쓸 사진 (이름 순으로 stride 장마다 + 마지막 사진). stride 1 이면 전부."""
+    names = sorted(names)
+    if stride <= 1 or not names:
+        return names
+    out = names[::stride]
+    if out[-1] != names[-1]:
+        out.append(names[-1])
+    return out
 
 def _read_priors(path: Path) -> dict | None:
     try:
@@ -146,7 +182,8 @@ class Register(Stage):
         # colmap/ 통째로 옮기면 priors.json 까지 빠지므로 register 결과만. 완료 표시 파일은 db 가 없으면 run 이 지움
         p = ctx.paths
         c = p.colmap
-        return [p.db, p.sparse, p.data, c / INFO, c / SPARSE_PASS1, c / DB_VERIFIED, c / SPARSE_ALIGNED]
+        return [p.db, p.sparse, p.data, c / INFO, c / SPARSE_PASS1, c / DB_VERIFIED, c / SPARSE_ALIGNED,
+                c / DB_GLOBAL, c / PASS1_LIST]
 
     def verify_mode(self, ctx: StageContext) -> bool:
         rc, p = ctx.project.cfg.register, ctx.paths
@@ -185,9 +222,17 @@ class Register(Stage):
         # 1차 정합 뒤에 위치 제약(priors.json)이 바뀌었으면 1차 자세·후보 짝·DB 의 제약이 모두 낡음 -> 매칭부터 다시
         if verify and mk[PASS1_DONE].exists():
             tag = mk[PASS1_DONE].read_text(encoding="utf-8").strip()
-            if tag and tag != _priors_tag(p.priors):
+            if tag and tag.split("|")[0] != _priors_tag(p.priors):
                 ctx.log("위치 제약(priors.json)이 1차 정합 뒤에 바뀜 -> 매칭부터 다시")
                 match_done.unlink(missing_ok=True)
+            elif tag and tag != _pass1_tag(p.priors, rc) and not mapper_done.exists():
+                # 1차는 앞뒤 짝만 있는 db.db 로 돌아야 함. 후보 짝을 이미 넣었으면 매칭부터 다시
+                if mk[CAND_DONE].exists():
+                    ctx.log(f"1차 설정(pass1_stride {rc.pass1_stride})이 바뀜 -> 후보 짝이 이미 들어가 매칭부터 다시")
+                    match_done.unlink(missing_ok=True)
+                else:
+                    ctx.log(f"1차 설정(pass1_stride {rc.pass1_stride})이 바뀜 -> 1차부터 다시")
+                    mk[PASS1_DONE].unlink()
         # 후보 짝·짝 검증 설정이 바뀌었으면 그 단계부터 다시 (끝난 register 는 mapper.done 으로 건너뜀)
         if verify and not mapper_done.exists():
             if mk[CAND_DONE].exists() and mk[CAND_DONE].read_text(encoding="utf-8").strip() not in (
@@ -222,6 +267,11 @@ class Register(Stage):
         if mapper_done.exists() and not (info_path.exists()
                                          and schemas.read_json(info_path).get("mode", "plain") == mode):
             mapper_done.unlink()
+        # 2차 정합 방식이 바뀌었으면 2차부터 다시 (1차·후보 짝·검증은 그대로)
+        if verify and mapper_done.exists() and \
+                schemas.read_json(info_path).get("pass2_mapper", "incremental") != rc.pass2_mapper:
+            ctx.log(f"2차 정합 방식이 바뀜 (-> {rc.pass2_mapper}) -> 2차 정합부터 다시")
+            mapper_done.unlink()
         # 표시 파일 없이 남은 결과 = 끊긴 실행 -> 옆으로 치움 (삭제 안 함)
         if db.exists() and not match_done.exists():
             ctx.log(f"끝나지 않은 db.db -> {move_aside(db).name}")
@@ -229,6 +279,8 @@ class Register(Stage):
             ctx.log(f"끝나지 않은 {SPARSE_PASS1} -> {move_aside(pass1_dir).name}")
         if verify and dbv.exists() and not mk[VERIFY_DONE].exists():
             ctx.log(f"끝나지 않은 {DB_VERIFIED} -> {move_aside(dbv).name}")
+        if verify and (col / DB_GLOBAL).exists() and not mapper_done.exists():
+            ctx.log(f"끝나지 않은 {DB_GLOBAL} -> {move_aside(col / DB_GLOBAL).name}")
         if sparse.exists() and not mapper_done.exists():
             ctx.log(f"끝나지 않은 sparse -> {move_aside(sparse).name}")
         if aligned_dir.exists() and not mapper_done.exists():
@@ -339,8 +391,14 @@ class Register(Stage):
             ok = False
             if n:
                 pass1_dir.mkdir(parents=True, exist_ok=True)
+                extra = []
+                if rc.pass1_stride > 1:
+                    sub = pass1_image_list([f.name for f in frames], rc.pass1_stride)
+                    (col / PASS1_LIST).write_text("\n".join(sub) + "\n", encoding="utf-8")
+                    extra = [OPT_MAPPER_IMAGE_LIST, col / PASS1_LIST]
+                    ctx.log(f"1차는 {rc.pass1_stride}장마다: {len(sub)}/{len(frames)}장 ({PASS1_LIST})")
                 r = colmap(CMD_PRIOR_MAPPER, "--database_path", db, "--image_path", p.frames,
-                           "--output_path", pass1_dir, *PRIOR_MAPPER_EXTRA)
+                           "--output_path", pass1_dir, *PRIOR_MAPPER_EXTRA, *extra)
                 ok = r.ok and _has_models(pass1_dir)
             if not ok:
                 old = move_aside(pass1_dir)
@@ -350,8 +408,9 @@ class Register(Stage):
                 if not (r.ok and _has_models(sparse)):
                     old = move_aside(sparse)
                     return StageResult(False, f"정합 실패: 모델 없음 (중간 결과 {old.name if old else '-'})")
-                return {"mapper": CMD_MAPPER, "pair_verify": {"skipped": "1차 정합 실패"}, "aligned": False}
-            mk[PASS1_DONE].write_text(_priors_tag(p.priors), encoding="utf-8")
+                return {"mapper": CMD_MAPPER, "pair_verify": {"skipped": "1차 정합 실패"}, "aligned": False,
+                        "pass1_stride": rc.pass1_stride, "pass2_mapper": rc.pass2_mapper}
+            mk[PASS1_DONE].write_text(_pass1_tag(p.priors, rc), encoding="utf-8")
             ctx.log(f"1차 정합 끝: {SPARSE_PASS1} 가장 큰 모델 {best_model(pass1_dir)[1]}장")
 
         # 3) 후보 짝 추가 (같은 db.db. 이미 매칭한 짝은 COLMAP 이 건너뜀)
@@ -367,7 +426,7 @@ class Register(Stage):
 
         # 4) 사본에서 짝 검증
         if not mk[VERIFY_DONE].exists():
-            stats = self._verify(ctx, priors, len(frames))
+            stats = self._verify(ctx, priors, [f.name for f in frames])
             stats["settings"] = _verify_settings(rc)
             mk[VERIFY_DONE].write_text(json.dumps(stats, ensure_ascii=False), encoding="utf-8")
         try:
@@ -379,12 +438,30 @@ class Register(Stage):
         if stats.get("skipped"):
             src, used = pass1_dir, CMD_PRIOR_MAPPER
         else:
-            src = sparse
+            src, used = sparse, None
             sparse.mkdir(parents=True, exist_ok=True)
-            r = colmap(CMD_PRIOR_MAPPER, "--database_path", dbv, "--image_path", p.frames,
-                       "--output_path", sparse, *PRIOR_MAPPER_EXTRA)
-            used = CMD_PRIOR_MAPPER
-            if not (r.ok and _has_models(sparse)):
+            if rc.pass2_mapper == "global":
+                # view_graph_calibrator 가 DB 를 고치므로 사본에서 (db_verified.db 는 실패 시 incremental 이 그대로 씀)
+                dbg = col / DB_GLOBAL
+                if dbg.exists():
+                    move_aside(dbg)
+                shutil.copy2(dbv, dbg)
+                r = colmap(CMD_VGC, "--database_path", dbg)
+                if r.ok:
+                    r = colmap(CMD_GLOBAL, "--database_path", dbg, "--image_path", p.frames, "--output_path", sparse)
+                if r.ok and _has_models(sparse):
+                    used = CMD_GLOBAL
+                else:
+                    old = move_aside(sparse, "global_failed")
+                    sparse.mkdir(parents=True, exist_ok=True)
+                    ctx.log(f"경고: 2차 {CMD_GLOBAL} 실패 (코드 {r.code}) -> {CMD_PRIOR_MAPPER} 로 다시. "
+                            f"중간 결과 {old.name if old else '-'}")
+            r = None
+            if used is None:
+                r = colmap(CMD_PRIOR_MAPPER, "--database_path", dbv, "--image_path", p.frames,
+                           "--output_path", sparse, *PRIOR_MAPPER_EXTRA)
+                used = CMD_PRIOR_MAPPER
+            if r is not None and not (r.ok and _has_models(sparse)):
                 old = move_aside(sparse, "prior_failed")
                 sparse.mkdir(parents=True, exist_ok=True)
                 ctx.log(f"경고: 2차 {CMD_PRIOR_MAPPER} 실패 (코드 {r.code}) -> {CMD_MAPPER} 로 다시. "
@@ -397,11 +474,12 @@ class Register(Stage):
 
         # 6) 가장 큰 모델을 수평 맞추고 제약에 다시 맞춤
         best, n = best_model(src)
-        out = {"mapper": used, "pair_verify": stats, "aligned": False, "model": str(best.relative_to(col).as_posix())}
+        out = {"mapper": used, "pair_verify": stats, "aligned": False, "model": str(best.relative_to(col).as_posix()),
+               "pass1_stride": rc.pass1_stride, "pass2_mapper": rc.pass2_mapper}
         try:
             if used != CMD_PRIOR_MAPPER and not rc.gimbal_level:
-                # 일반 mapper 결과는 좌표가 제멋대로라 위가 어디인지 모름. 수평 맞추기 없이 수직축 회전만으로는 못 맞춤
-                raise ValueError(f"{CMD_MAPPER} 결과인데 gimbal_level 이 꺼져 있어 위 방향을 모름")
+                # 일반 mapper·global_mapper 결과는 좌표가 제멋대로라 위가 어디인지 모름. 수평 맞추기 없이 수직축 회전만으로는 못 맞춤
+                raise ValueError(f"{used} 결과인데 gimbal_level 이 꺼져 있어 위 방향을 모름")
             new, ast = pair_verify.align_model_to_priors(cmodel.read_model(best), priors, level=rc.gimbal_level)
             tgt = col / SPARSE_ALIGNED / "0"
             tmp = col / SPARSE_ALIGNED / "0_tmp"
@@ -416,18 +494,24 @@ class Register(Stage):
                     + (f" (중간 결과 {old.name})" if old else ""))
         return out
 
-    def _verify(self, ctx, priors: dict, n_frames: int) -> dict:
-        """load_reference + db_verified.db 복사 + verify_pairs. 못 하면 {"skipped": 이유, ...}."""
+    def _verify(self, ctx, priors: dict, names: list[str]) -> dict:
+        """load_reference + db_verified.db 복사 + verify_pairs. 못 하면 {"skipped": 이유, ...}.
+        names: 전체 사진 이름 (시간 순). pass1_stride > 1 이면 1차에 빠진 사진을 보간 (간격 2 x stride 이하)."""
         p, rc = ctx.paths, ctx.project.cfg.register
         col, db = p.colmap, p.db
         dbv = col / DB_VERIFIED
+        n_frames = len(names)
+        kw = {}
+        if rc.pass1_stride > 1:
+            kw = {"order": sorted(names), "interp_max_gap": 2 * rc.pass1_stride}
         try:
             ref = pair_verify.load_reference(col / SPARSE_PASS1, priors, max_far_m=rc.verify_max_far_m,
-                                             level=rc.gimbal_level)
+                                             level=rc.gimbal_level, **kw)
         except Exception as e:  # noqa: BLE001
             ctx.log(f"경고: 1차 기준 자세 읽기 실패 {e} -> 1차 결과를 그대로 씀")
             return {"skipped": f"기준 자세 실패: {e}"}
-        ri = {k: ref.info[k] for k in ("models", "poses", "far_dropped", "unfit_models", "leveled_deg")}
+        ri = {k: ref.info[k] for k in ("models", "poses", "far_dropped", "unfit_models", "leveled_deg",
+                                       "interpolated", "interp_far_dropped") if k in ref.info}
         if len(ref.poses) < MIN_REF_FRAC * n_frames:
             ctx.log(f"경고: 1차 기준 자세 {len(ref.poses)}/{n_frames}장 (절반 미만) -> 짝 검증 안 하고 1차 결과를 그대로 씀")
             return {"skipped": "기준 자세가 절반 미만", "reference": ri}
@@ -441,7 +525,8 @@ class Register(Stage):
             return {"skipped": f"짝 검증 실패: {e}", "reference": ri}
         st["reference"] = ri
         ctx.log(f"짝 검증: 짝 {st['pairs']}개 중 {st['dropped']}개 삭제 (회전 {st['drop_rot']}, 방향 {st['drop_dir']}, "
-                f"기준 없음 {st['drop_unknown']}, 자세 못 구함 {st['drop_no_pose']}), 기준 자세 {len(ref.poses)}장")
+                f"기준 없음 {st['drop_unknown']}, 자세 못 구함 {st['drop_no_pose']}), 기준 자세 {len(ref.poses)}장"
+                + (f" (보간 {ref.info['interpolated']}장)" if ref.info.get("interpolated") else ""))
         return st
 
     # ---------------------------------------------------------------- 한 번 정합 (예전 흐름)

@@ -1,6 +1,7 @@
 """합성 복도 v4 로 실제 단계(prior -> register -> diagnose -> walls)를 끝까지 돌림. COLMAP 대신 colmap_shim.py.
 
   python run_e2e.py <v4 장면 폴더> <작업 폴더> --venv <pycolmap venv> [--pair-verify 1|0] [--seed 0]
+                    [--pass1-stride N] [--pass2-mapper incremental|global] [--until 단계] [--rerun 단계]
 
 작업 폴더에 프로젝트를 만듦: project.yaml, floorplan/plan.json(줄자 오차 흉내), sections/v4/{frames, path.json}.
 frames 는 장면 images/ 를 가리키는 심볼릭 링크 (원본 그대로).
@@ -29,7 +30,8 @@ PLAN = {"version": 1, "units": "m",
         "doors": [], "source": {"kind": "boxes"}}
 
 
-def make(scene: Path, work: Path, venv: Path, pair_verify: bool, seed: int, matcher: str) -> Project:
+def make(scene: Path, work: Path, venv: Path, pair_verify: bool, seed: int, matcher: str,
+         pass1_stride: int = 1, pass2_mapper: str = "incremental") -> Project:
     work.mkdir(parents=True, exist_ok=True)
     shim = work / "colmap"
     shim.write_text(f"#!/bin/sh\nSHIM_SEED={seed} exec {venv}/bin/python {HERE / 'colmap_shim.py'} \"$@\"\n")
@@ -37,7 +39,8 @@ def make(scene: Path, work: Path, venv: Path, pair_verify: bool, seed: int, matc
     (work / "project.yaml").write_text(json.dumps({
         "sections": [{"name": "v4", "video": str(work / "none.mp4")}],
         "tools": {"colmap": str(shim)},
-        "register": {"pair_verify": pair_verify, "matcher": matcher},
+        "register": {"pair_verify": pair_verify, "matcher": matcher, "pass1_stride": pass1_stride,
+                     "pass2_mapper": pass2_mapper},
         "walls": {"enabled": True, "seed": True},
     }, indent=1))
     (work / "floorplan").mkdir(exist_ok=True)
@@ -64,10 +67,14 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--matcher", default="sequential")
     ap.add_argument("--until", default="walls")
+    ap.add_argument("--rerun", default=None)
+    ap.add_argument("--pass1-stride", type=int, default=1)
+    ap.add_argument("--pass2-mapper", default="incremental")
     a = ap.parse_args()
-    pj = make(a.scene.resolve(), a.work.resolve(), a.venv.resolve(), bool(a.pair_verify), a.seed, a.matcher)
+    pj = make(a.scene.resolve(), a.work.resolve(), a.venv.resolve(), bool(a.pair_verify), a.seed, a.matcher,
+              a.pass1_stride, a.pass2_mapper)
     t0 = time.time()
-    ok = run_all(pj, until=a.until)
+    ok = run_all(pj, until=a.until, rerun=a.rerun)
     print(f"run_all ok={ok} {time.time() - t0:.0f}s", flush=True)
 
 

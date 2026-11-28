@@ -37,10 +37,15 @@ COMMANDS = {
     "spatial_matcher": {**DB, "--SpatialMatching.max_distance": float, "--SpatialMatching.max_num_neighbors": int,
                         "--SpatialMatching.ignore_z": _bool},
     "exhaustive_matcher": dict(DB),
-    "mapper": {**DB, "--image_path": str, "--output_path": str, "--input_path": str},
+    # --Mapper.image_list_path: option_manager.cc AddMapperOptions (mapper·pose_prior_mapper 둘 다 부름)
+    "mapper": {**DB, "--image_path": str, "--output_path": str, "--input_path": str, "--Mapper.image_list_path": str},
     "pose_prior_mapper": {**DB, "--image_path": str, "--output_path": str, "--input_path": str,
                           "--overwrite_priors_covariance": _bool, "--use_robust_loss_on_prior_position": _bool,
-                          "--prior_position_loss_scale": float},
+                          "--prior_position_loss_scale": float, "--Mapper.image_list_path": str},
+    # exe/sfm.cc RunViewGraphCalibrator (AddDatabaseOptions + 선택 옵션), RunGlobalMapper (AddDatabaseOptions,
+    # AddImageOptions, output_path, AddGlobalMapperOptions). register.py 가 쓰는 것만
+    "view_graph_calibrator": dict(DB),
+    "global_mapper": {**DB, "--image_path": str, "--output_path": str, "--GlobalMapper.image_list_path": str},
     "image_undistorter": {"--image_path": str, "--input_path": str, "--output_path": str, "--output_type": str},
 }
 REQUIRED = {
@@ -50,7 +55,14 @@ REQUIRED = {
     "mapper": ["--database_path", "--image_path", "--output_path"],
     "pose_prior_mapper": ["--database_path", "--image_path", "--output_path"],
     "image_undistorter": ["--image_path", "--input_path", "--output_path"],
+    "view_graph_calibrator": ["--database_path"],
+    "global_mapper": ["--database_path", "--image_path", "--output_path"],
 }
+
+
+def _read_lines(path: str) -> list[str]:
+    """COLMAP util/file.cc ReadTextFileLines 처럼: 앞뒤 공백 자르고 빈 줄 건너뜀."""
+    return [ln.strip() for ln in Path(path).read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 def parse(cmd: str, argv: list[str]) -> dict:
@@ -120,6 +132,9 @@ def main(argv: list[str]) -> int:
         mp = pycolmap.IncrementalPipelineOptions()
         mp.num_threads = THREADS
         mp.random_seed = int(os.environ.get("SHIM_SEED", "0"))
+        if "--Mapper.image_list_path" in o:
+            mp.image_names = _read_lines(o["--Mapper.image_list_path"])
+            print(f"SHIM image_names {len(mp.image_names)}", flush=True)
         if cmd == "pose_prior_mapper":
             if o.get("--overwrite_priors_covariance"):
                 print("shim: overwrite_priors_covariance 1 은 흉내 안 함", file=sys.stderr)
@@ -135,6 +150,27 @@ def main(argv: list[str]) -> int:
         if not recs:
             print(f"SHIM {cmd} {time.time() - t0:.1f}s", flush=True)
             return 1                              # COLMAP 도 모델이 없으면 실패로 끝남
+    elif cmd == "view_graph_calibrator":
+        vo = pycolmap.ViewGraphCalibrationOptions()
+        vo.random_seed = int(os.environ.get("SHIM_SEED", "0"))
+        if not pycolmap.calibrate_view_graph(o["--database_path"], vo):
+            print(f"SHIM {cmd} {time.time() - t0:.1f}s", flush=True)
+            return 1
+    elif cmd == "global_mapper":
+        out = Path(o["--output_path"])
+        if not out.is_dir():
+            print(f"output_path 없음: {out}", file=sys.stderr)
+            return 1
+        go = pycolmap.GlobalPipelineOptions()
+        go.num_threads = THREADS
+        go.random_seed = int(os.environ.get("SHIM_SEED", "0"))
+        if "--GlobalMapper.image_list_path" in o:
+            go.image_names = _read_lines(o["--GlobalMapper.image_list_path"])
+        recs = pycolmap.global_mapping(o["--database_path"], o["--image_path"], out, go)
+        print(f"SHIM models {[r.num_reg_images() for r in recs.values()]}", flush=True)
+        if not recs:
+            print(f"SHIM {cmd} {time.time() - t0:.1f}s", flush=True)
+            return 1
     elif cmd == "image_undistorter":
         pycolmap.undistort_images(o["--output_path"], o["--input_path"], o["--image_path"],
                                   output_type=o.get("--output_type", "COLMAP"), num_threads=THREADS)

@@ -153,7 +153,8 @@ def _patch_verify(monkeypatch, names, fake, n_ref=None):
     """load_reference / verify_pairs / align 를 가짜로: 부른 시점(명령 몇 개 뒤)과 DB 경로를 기록."""
     seen = {}
 
-    def load_ref(sparse_dir, priors, max_far_m=1.5, min_model=10, level=True):
+    def load_ref(sparse_dir, priors, max_far_m=1.5, min_model=10, level=True, **kw):
+        seen["ref_kw"] = kw
         seen["ref_dir"] = str(sparse_dir)
         poses = {nm: (np.eye(3), np.zeros(3)) for nm in names[:len(names) if n_ref is None else n_ref]}
         return pair_verify.Reference(poses, np.eye(3), np.zeros(4), {"models": [30], "poses": len(poses),
@@ -426,3 +427,196 @@ def test_register_pair_verify_settings_changed_reverifies(tmp_path, monkeypatch)
     assert any(x.name.startswith("db_verified_failed_") for x in col.iterdir())
     st = json.loads((col / "verify.done").read_text(encoding="utf-8"))
     assert st["settings"]["rot_tol_deg"] == 20.0
+
+
+# ---------------------------------------------------------------- 속도: pass1_stride, pass2_mapper (e2e_v4/SPEED.md)
+from indoorgs.stages import register as reg_mod  # noqa: E402
+
+
+def _global_handlers():
+    h = colmap_handlers()
+    h["view_graph_calibrator"] = lambda cmd: None
+    h["global_mapper"] = h["mapper"]
+    return h
+
+
+def test_pass1_image_list():
+    names = [f"f_{i:05d}.jpg" for i in range(1, 11)]
+    assert reg_mod.pass1_image_list(names, 1) == names
+    assert reg_mod.pass1_image_list(list(reversed(names)), 3) == [names[i] for i in (0, 3, 6, 9)]
+    assert reg_mod.pass1_image_list(names, 4) == [names[i] for i in (0, 4, 8, 9)]     # 마지막 사진은 항상
+    assert reg_mod.pass1_image_list([], 4) == []
+
+
+def test_register_pass1_stride_image_list_and_interpolation(tmp_path, monkeypatch):
+    root = make_project(tmp_path / "p", extra_yaml="register: {pass1_stride: 3}\n")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    fake = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake)
+    seen = _patch_verify(monkeypatch, names, fake)
+    assert Register().run(ctx).ok
+    assert fake.names() == ["feature_extractor", "sequential_matcher", "pose_prior_mapper", "spatial_matcher",
+                            "pose_prior_mapper", "image_undistorter"]
+    col = ctx.paths.colmap
+    p1, p2 = fake.calls[2], fake.calls[4]
+    lst = arg(p1, "--Mapper.image_list_path")
+    assert lst == str(col / "pass1_images.txt")
+    assert (col / "pass1_images.txt").read_text(encoding="utf-8").split() == names[::3] + [names[-1]]
+    assert "--Mapper.image_list_path" not in p2                      # 2차는 전부
+    assert arg(p1, "--database_path").endswith("db.db")
+    assert seen["ref_kw"] == {"order": names, "interp_max_gap": 6}
+    assert (col / "pass1.done").read_text(encoding="utf-8").endswith("|stride=3")
+    info = json.loads((col / "register.json").read_text(encoding="utf-8"))
+    assert info["pass1_stride"] == 3 and info["pass2_mapper"] == "incremental"
+    assert json.loads((col / "verify.done").read_text(encoding="utf-8"))["settings"]["pass1_stride"] == 3
+
+
+def test_register_pass1_stride_1_keeps_old_markers(tmp_path, monkeypatch):
+    """기본(1)은 예전과 같음: 사진 목록 옵션 없음, 보간 없음, pass1.done·verify 설정 지문도 예전 그대로."""
+    root = make_project(tmp_path / "p")
+    ctx, _ = ctx_of(root)
+    names = _write_priors(ctx)
+    fake = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake)
+    seen = _patch_verify(monkeypatch, names, fake)
+    assert Register().run(ctx).ok
+    col = ctx.paths.colmap
+    assert "--Mapper.image_list_path" not in fake.calls[2] and not (col / "pass1_images.txt").exists()
+    assert seen["ref_kw"] == {}
+    assert (col / "pass1.done").read_text(encoding="utf-8") == reg_mod._priors_tag(ctx.paths.priors)
+    assert "pass1_stride" not in json.loads((col / "verify.done").read_text(encoding="utf-8"))["settings"]
+
+
+def test_register_pass1_stride_changed_before_candidates_redoes_pass1_only(tmp_path, monkeypatch):
+    root = make_project(tmp_path / "p")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    h = colmap_handlers()
+    h["spatial_matcher"] = lambda cmd: 1
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    _patch_verify(monkeypatch, names, fake)
+    assert not Register().run(ctx).ok
+    ctx.project.cfg.register.pass1_stride = 4
+    fake2 = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake2)
+    _patch_verify(monkeypatch, names, fake2)
+    assert Register().run(ctx).ok
+    assert fake2.names() == ["pose_prior_mapper", "spatial_matcher", "pose_prior_mapper", "image_undistorter"]
+    assert "--Mapper.image_list_path" in fake2.calls[0]
+    assert any("1차부터 다시" in m for m in logs)
+    assert any(x.name.startswith("sparse_pass1_failed_") for x in ctx.paths.colmap.iterdir())   # 옛 1차는 옆으로
+
+
+def test_register_pass1_stride_changed_after_candidates_rematches(tmp_path, monkeypatch):
+    """후보 짝이 이미 db.db 에 들어갔으면 1차를 다시 돌릴 수 없음 (가짜 짝이 1차에 섞임) -> 매칭부터."""
+    root = make_project(tmp_path / "p")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    h = colmap_handlers()
+    ok_prior = h["pose_prior_mapper"]
+    h["pose_prior_mapper"] = lambda cmd: 1 if arg(cmd, "--database_path").endswith("db_verified.db") else ok_prior(cmd)
+    h["mapper"] = lambda cmd: 1
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    _patch_verify(monkeypatch, names, fake)
+    assert not Register().run(ctx).ok
+    assert (ctx.paths.colmap / "candidates.done").exists()
+    ctx.project.cfg.register.pass1_stride = 4
+    fake2 = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake2)
+    _patch_verify(monkeypatch, names, fake2)
+    assert Register().run(ctx).ok
+    assert fake2.names()[0] == "feature_extractor"
+    assert any("매칭부터 다시" in m for m in logs)
+    assert any(x.name.startswith("db_failed_") for x in ctx.paths.colmap.iterdir())             # 옛 db.db 는 옆으로
+
+
+def test_register_pass2_global(tmp_path, monkeypatch):
+    root = make_project(tmp_path / "p", extra_yaml="register: {pass2_mapper: global}\n")
+    ctx, _ = ctx_of(root)
+    names = _write_priors(ctx)
+    fake = FakeRunner(_global_handlers())
+    monkeypatch.setattr(runner, "run", fake)
+    seen = _patch_verify(monkeypatch, names, fake)
+    assert Register().run(ctx).ok
+    assert fake.names() == ["feature_extractor", "sequential_matcher", "pose_prior_mapper", "spatial_matcher",
+                            "view_graph_calibrator", "global_mapper", "image_undistorter"]
+    col = ctx.paths.colmap
+    vgc, glo = fake.calls[4], fake.calls[5]
+    # 검증한 사본의 사본(db_global.db)에서. db_verified.db 는 그대로 남음
+    assert arg(vgc, "--database_path").endswith("db_global.db") and arg(glo, "--database_path").endswith("db_global.db")
+    assert arg(glo, "--output_path") == str(ctx.paths.sparse) and arg(glo, "--image_path") == str(ctx.paths.frames)
+    assert (col / "db_verified.db").exists() and (col / "db_global.db").exists()
+    info = json.loads((col / "register.json").read_text(encoding="utf-8"))
+    assert info["mapper"] == "global_mapper" and info["aligned"] is True and info["pass2_mapper"] == "global"
+    assert info["model"] == "sparse_aligned/0" and seen["align_level"] is True
+    assert paths_in_plan_coords(ctx.paths)
+    assert arg(fake.calls[-1], "--input_path").replace("\\", "/").endswith("sparse_aligned/0")
+
+
+def test_register_pass2_global_without_level_not_plan(tmp_path, monkeypatch):
+    root = make_project(tmp_path / "p", extra_yaml="register: {pass2_mapper: global, gimbal_level: false}\n")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    fake = FakeRunner(_global_handlers())
+    monkeypatch.setattr(runner, "run", fake)
+    seen = _patch_verify(monkeypatch, names, fake)
+    assert Register().run(ctx).ok
+    info = json.loads((ctx.paths.colmap / "register.json").read_text(encoding="utf-8"))
+    assert info["mapper"] == "global_mapper" and info["aligned"] is False and "align_level" not in seen
+    assert not paths_in_plan_coords(ctx.paths)
+    assert any("global_mapper 결과인데 gimbal_level" in m for m in logs)
+
+
+def test_register_pass2_global_failure_falls_back_to_prior_mapper(tmp_path, monkeypatch):
+    root = make_project(tmp_path / "p", extra_yaml="register: {pass2_mapper: global}\n")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    h = _global_handlers()
+    h["global_mapper"] = lambda cmd: 1
+    fake = FakeRunner(h)
+    monkeypatch.setattr(runner, "run", fake)
+    _patch_verify(monkeypatch, names, fake)
+    assert Register().run(ctx).ok
+    assert fake.names()[4:] == ["view_graph_calibrator", "global_mapper", "pose_prior_mapper", "image_undistorter"]
+    assert arg(fake.calls[6], "--database_path").endswith("db_verified.db")
+    info = json.loads((ctx.paths.colmap / "register.json").read_text(encoding="utf-8"))
+    assert info["mapper"] == "pose_prior_mapper" and info["aligned"] is True
+    assert any(p.name.startswith("sparse_global_failed_") for p in ctx.paths.colmap.iterdir())
+
+
+def test_register_pass2_mapper_change_reruns_pass2_only(tmp_path, monkeypatch):
+    root = make_project(tmp_path / "p")
+    ctx, logs = ctx_of(root)
+    names = _write_priors(ctx)
+    fake = FakeRunner(colmap_handlers())
+    monkeypatch.setattr(runner, "run", fake)
+    _patch_verify(monkeypatch, names, fake)
+    assert Register().run(ctx).ok
+    ctx.project.cfg.register.pass2_mapper = "global"
+    fake2 = FakeRunner(_global_handlers())
+    monkeypatch.setattr(runner, "run", fake2)
+    _patch_verify(monkeypatch, names, fake2)
+    assert Register().run(ctx).ok
+    assert fake2.names() == ["view_graph_calibrator", "global_mapper", "image_undistorter"]
+    assert any("2차 정합 방식이 바뀜" in m for m in logs)
+    col = ctx.paths.colmap
+    assert any(x.name.startswith("sparse_failed_") for x in col.iterdir())          # 옛 2차 결과는 옆으로 (삭제 안 함)
+    assert json.loads((col / "register.json").read_text(encoding="utf-8"))["mapper"] == "global_mapper"
+    # 같은 설정으로 또 돌리면 정합은 건너뜀
+    fake3 = FakeRunner(_global_handlers())
+    monkeypatch.setattr(runner, "run", fake3)
+    _patch_verify(monkeypatch, names, fake3)
+    assert Register().run(ctx).ok
+    assert fake3.names() == ["image_undistorter"]
+
+
+def test_config_pass1_stride_and_pass2_mapper_checked(tmp_path):
+    from indoorgs.config import ConfigError, parse
+    base = {"sections": [{"name": "a", "video": "v.mp4"}]}
+    assert parse({**base, "register": {"pass1_stride": 4, "pass2_mapper": "global"}}).register.pass1_stride == 4
+    for bad in ({"pass1_stride": 0}, {"pass1_stride": 2.5}, {"pass1_stride": True}, {"pass2_mapper": "glomap"}):
+        with pytest.raises(ConfigError):
+            parse({**base, "register": bad})

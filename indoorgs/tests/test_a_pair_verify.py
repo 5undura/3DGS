@@ -267,3 +267,73 @@ def test_level_method_normal_walk_is_right_axes():
     rng = np.random.default_rng(12)
     Rs, Cs = _corridor(rng=rng)
     assert pv.up_direction(np.array([r.T for r in Rs]), Cs)[1] == "right_axes"
+
+
+# ---------------------------------------------------------------- 1차를 N장마다 (pass1_stride): 보간
+def test_slerp_pose_midpoint_and_ends():
+    Ra, Rb = Rz(10) @ R_CW0.T, Rz(50) @ R_CW0.T
+    Ca, Cb = np.array([0.0, 0, 1.4]), np.array([2.0, 1.0, 1.4])
+    R0, C0 = pv.slerp_pose(Ra, Ca, Rb, Cb, 0.0)
+    R1, C1 = pv.slerp_pose(Ra, Ca, Rb, Cb, 1.0)
+    Rm, Cm = pv.slerp_pose(Ra, Ca, Rb, Cb, 0.25)
+    assert np.allclose(R0, Ra) and np.allclose(R1, Rb, atol=1e-9) and np.allclose(C0, Ca) and np.allclose(C1, Cb)
+    assert np.allclose(Rm, Rz(20) @ R_CW0.T, atol=1e-9)           # 회전은 각도로 1/4 (= 측지선)
+    assert np.allclose(Cm, [0.5, 0.25, 1.4])
+
+
+def test_interpolate_gaps_limit_and_skip():
+    order = [name(i) for i in range(1, 21)]
+    pose = {n: (Rz(4.0 * k) @ R_CW0.T, np.array([0.25 * k, 0, 1.4])) for k, n in enumerate(order)}
+    # 4장마다 + 0,4,8 / 16 (12 가 빠짐 -> 8~16 간격 8) / 19
+    have = {order[k]: pose[order[k]] for k in (0, 4, 8, 16, 19)}
+    got = pv.interpolate_gaps(have, order, max_gap=8, skip={order[2]})
+    assert order[2] not in got                                        # skip 은 안 만듦
+    for k in (1, 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18):
+        R, C = got[order[k]]
+        assert np.allclose(C, pose[order[k]][1], atol=1e-9), k
+        assert np.allclose(R, pose[order[k]][0], atol=1e-9), k
+    assert len(got) == 14
+    got7 = pv.interpolate_gaps(have, order, max_gap=7)                # 간격 8 은 안 채움
+    assert all(order[k] not in got7 for k in range(9, 16)) and order[1] in got7 and order[17] in got7
+
+
+def test_load_reference_interpolates_within_model_only(tmp_path):
+    """1차를 3장마다 돌린 모델 두 조각: 같은 조각 안의 빈 사진은 보간, 조각 사이(다른 모델)는 안 이음, 간격 제한."""
+    rng = np.random.default_rng(11)
+    Rs, Cs = _corridor(n=90, back=False, yaw_wiggle=5.0, rng=rng)
+    names = [name(i + 1) for i in range(90)]
+    pri = _priors(names, Cs)
+    sp = tmp_path / "sparse_pass1"
+    a = [k for k in range(0, 30, 3)]                                   # 0..27
+    b = [k for k in range(33, 90, 3) if k not in (60, 63)]             # 33..87, 60·63 빠짐 (57~66 간격 9 > 6)
+    cm.write_model(pv.transform_model(_model([Rs[k] for k in a], Cs[a], [names[k] for k in a], rng),
+                                      1.7, Rz(40) @ Rx(25), np.array([3, -1, 2.0])), sp / "0")
+    cm.write_model(pv.transform_model(_model([Rs[k] for k in b], Cs[b], [names[k] for k in b], rng),
+                                      0.6, Rx(160), np.array([-2, 0, 5.0])), sp / "1")
+    plain = pv.load_reference(sp, pri)
+    assert len(plain.poses) == len(a) + len(b) and plain.info["interpolated"] == 0
+    ref = pv.load_reference(sp, pri, order=names, interp_max_gap=6)
+    missing = set(range(28, 33)) | set(range(58, 66)) | {88, 89}       # 조각 사이, 간격 9, 끝 뒤
+    assert set(ref.poses) == {names[k] for k in range(90) if k not in missing}
+    assert ref.info["interpolated"] == len(ref.poses) - len(a) - len(b)
+    direct = {names[k] for k in a + b}
+    for k in range(90):
+        if names[k] in ref.poses:
+            R, C = ref.poses[names[k]]
+            # 정답은 옆으로 ±0.3 m, 요 ±5° 흔들림 -> 보간한 것은 그만큼 다를 수 있음 (진행 방향 x 는 정확)
+            tol_c, tol_r = (0.15, 1.0) if names[k] in direct else (0.65, 10.5)
+            assert abs(C[0] - Cs[k][0]) < 0.05 and np.linalg.norm(C - Cs[k]) < tol_c, k
+            assert pv._rot_deg(R @ Rs[k]) < tol_r, k
+
+
+def test_load_reference_interpolated_far_from_prior_dropped(tmp_path):
+    rng = np.random.default_rng(12)
+    Rs, Cs = _corridor(n=30, back=False, yaw_wiggle=2.0, rng=rng)
+    names = [name(i + 1) for i in range(30)]
+    P = Cs.copy()
+    P[4] += [0, 2.5, 0]                                               # 이 사진의 제약이 2.5 m 틀림
+    keep = list(range(0, 30, 3))
+    cm.write_model(_model([Rs[k] for k in keep], Cs[keep], [names[k] for k in keep], rng), tmp_path / "sp" / "0")
+    ref = pv.load_reference(tmp_path / "sp", _priors(names, P), order=names, interp_max_gap=6)
+    assert names[4] not in ref.poses and ref.info["interp_far_dropped"] == 1
+    assert ref.info["interpolated"] == 30 - len(keep) - 1 - 2          # 끝(28, 29)은 뒤 이웃 없음
