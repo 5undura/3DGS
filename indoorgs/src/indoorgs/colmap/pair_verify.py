@@ -154,10 +154,42 @@ def similarity_to_priors(R_wc: np.ndarray, C: np.ndarray, P: np.ndarray, level: 
     return s, Rz @ Q, b, st
 
 
+def slerp_pose(Ra: np.ndarray, Ca: np.ndarray, Rb: np.ndarray, Cb: np.ndarray,
+               t: float) -> tuple[np.ndarray, np.ndarray]:
+    """두 자세 사이 (R world_from_cam 은 측지선 보간 = slerp, 중심은 직선 보간). t=0 -> a, t=1 -> b."""
+    rv, _ = cv2.Rodrigues(np.ascontiguousarray(Ra.T @ Rb))
+    Rt, _ = cv2.Rodrigues(rv * float(t))
+    return Ra @ Rt, (1.0 - t) * Ca + t * Cb
+
+
+def interpolate_gaps(model_poses: dict[str, tuple[np.ndarray, np.ndarray]], order: list[str], max_gap: int,
+                     skip: set[str] | dict | None = None) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """한 모델의 자세(model_poses)로, 사진 순서(order = 이름 순 = 시간 순)에서 그 모델에 없는 사진의 자세를 앞뒤 이웃으로 보간.
+    이웃 둘의 순서 간격이 max_gap 이하일 때만 (그보다 길게 빈 구간은 건너뜀). skip 에 있는 이름은 안 만듦.
+    돌려줌: {이름: (R_world_from_cam, 중심)} (새로 만든 것만)."""
+    idx = {n: k for k, n in enumerate(order)}
+    have = sorted(idx[n] for n in model_poses if n in idx)
+    out = {}
+    skip = skip or set()
+    for ia, ib in zip(have, have[1:]):
+        if ib - ia < 2 or ib - ia > max_gap:
+            continue
+        (Ra, Ca), (Rb, Cb) = model_poses[order[ia]], model_poses[order[ib]]
+        for j in range(ia + 1, ib):
+            nm = order[j]
+            if nm in skip or nm in model_poses:
+                continue
+            out[nm] = slerp_pose(Ra, Ca, Rb, Cb, (j - ia) / (ib - ia))
+    return out
+
+
 def load_reference(sparse_dir: Path, priors: dict, max_far_m: float = 1.5, min_model: int = 10,
-                   level: bool = True) -> Reference:
+                   level: bool = True, order: list[str] | None = None, interp_max_gap: int = 0) -> Reference:
     """sparse_dir/<n> 의 모델(사진 min_model 장 이상) 모두에서 사진 자세를 모음. 모델마다 수평 맞추기 + 제약에 다시 맞추기.
-    제약에서 max_far_m 넘게 떨어진 사진은 뺌 (1차에서 잘못 놓인 사진). 겹치면 큰 모델 것."""
+    제약에서 max_far_m 넘게 떨어진 사진은 뺌 (1차에서 잘못 놓인 사진). 겹치면 큰 모델 것.
+    order(전체 사진 이름, 시간 순)와 interp_max_gap >= 2 를 주면 (1차를 N장마다만 돌린 경우) 모델에 없는 사진을
+    같은 모델 안의 앞뒤 이웃으로 보간 (interpolate_gaps; 순서 간격 interp_max_gap 이하만, 모델끼리는 안 섞음).
+    보간한 자세도 제약에서 max_far_m 넘으면 뺌. 실제로 놓인 자세가 항상 우선 (보간은 빈 이름만 채움)."""
     pri = _prior_map(priors)
     models = []
     for d in sorted(p for p in Path(sparse_dir).iterdir() if p.is_dir()):
@@ -171,6 +203,7 @@ def load_reference(sparse_dir: Path, priors: dict, max_far_m: float = 1.5, min_m
         raise ValueError(f"{sparse_dir}: 사진 {min_model}장 이상인 모델 없음")
     models.sort(key=lambda m: -len(m.images))
     poses, far, tilt, unfit = {}, 0, [], 0
+    per_model = []                                      # 모델별 (도면 좌표) 자세: 보간용
     for m in models:
         ims = list(m.images.values())
         R = np.array([im.R.T for im in ims])            # world_from_cam
@@ -183,17 +216,31 @@ def load_reference(sparse_dir: Path, priors: dict, max_far_m: float = 1.5, min_m
         s, A, b, st = sim
         tilt.append(st["leveled_deg"])
         R, C = np.einsum("ij,njk->nik", A, R), s * C @ A.T + b
+        mine = {}
         for im, r, c in zip(ims, R, C):
-            if im.name in poses:
-                continue
             if im.name in pri and np.linalg.norm(c - pri[im.name]) > max_far_m:
-                far += 1
+                if im.name not in poses:
+                    far += 1
                 continue
-            poses[im.name] = (r, c)
+            mine[im.name] = (r, c)
+            if im.name not in poses:
+                poses[im.name] = (r, c)
+        per_model.append((mine, {im.name for im in ims}))
+    n_interp, far_interp = 0, 0
+    if order and interp_max_gap >= 2:
+        for mine, names_in_model in per_model:          # 큰 모델부터. 모델에 있는데 멀어서 뺀 사진은 보간 안 함
+            for nm, (r, c) in interpolate_gaps(mine, order, interp_max_gap,
+                                               skip=set(poses) | names_in_model).items():
+                if nm in pri and np.linalg.norm(c - pri[nm]) > max_far_m:
+                    far_interp += 1
+                    continue
+                poses[nm] = (r, c)
+                n_interp += 1
     K, dist = camera_to_cv(next(iter(models[0].cameras.values())))
     return Reference(poses, K, dist, {"models": [len(m.images) for m in models], "poses": len(poses),
                                       "far_dropped": far, "unfit_models": unfit, "leveled_deg": tilt,
-                                      "focal": float(K[0, 0])})
+                                      "focal": float(K[0, 0]), "interpolated": n_interp,
+                                      "interp_far_dropped": far_interp})
 
 
 def _relative_pose(p1, p2, K, dist):
