@@ -173,8 +173,11 @@ def test_cleanup_config():
     c = config.parse(base_d)
     assert c.cleanup.enabled and c.cleanup.steps == ["floaters"]          # 11-28 RESULTS2 기본값
     w = c.walls
-    assert (w.seed, w.snap, w.repair, w.remove_behind, w.flatten, w.trust_plan_dims) == (True, False, False, False, False,
+    # snap·flatten 은 finetune(Brush 기본 켬) + seed 일 때 켜짐 (RESULTS2 E). remove_behind·repair 는 끔
+    assert (w.seed, w.snap, w.repair, w.remove_behind, w.flatten, w.trust_plan_dims) == (True, True, False, False, True,
                                                                                          False)
+    w = config.parse({**base_d, "finetune": {"enabled": False}}).walls
+    assert (w.snap, w.flatten) == (False, False)
     c = config.parse({**base_d, "cleanup": {"steps": ["floaters", "sh"]}})
     assert c.cleanup.steps == ["floaters", "sh"]
     for bad in ({"steps": ["nope"]}, {"steps": "sh"}, {"steps": ["sh", "sh"]}, {"max_pieces": 4}):

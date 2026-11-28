@@ -1,6 +1,6 @@
 """6. 합치기 (담당 C, 프로젝트 범위). 구간별 최종 PLY -> merged/building.ply + layout.json
 
-구간 PLY: fill/holes_backdrop.ply 가 있으면 그것, 없으면 최신 train/<학습기>_<프리셋>[_N]/splat.ply.
+구간 PLY: 유효한 train/<run>/finetune/splat_ft.ply > fill/holes_backdrop.ply > 최신 train/<학습기>_<프리셋>[_N] 의 best_ply.
 구간 변환(모델 좌표 -> 건물 좌표, 4x4):
 1. 공간 정합 구간 (plan.json + 구간 register.json mapper = pose_prior_mapper): 이미 도면 좌표 -> 단위 행렬.
    plan.json 의 문 근처에서 겹치는 구간끼리 작은 강체 정렬(점-점 ICP, 회전 3도·이동 0.3m 이하,
@@ -32,12 +32,10 @@ ICP_MIN_PTS = 200
 
 
 def section_ply(project, sec, paths) -> Path:
-    if paths.fill_ply.exists():
-        return paths.fill_ply
-    t = project.cfg.train
-    run = paths.latest_train_run(t.trainer, t.preset)                      # 최신 학습 (_2, _3 ...)
-    from .snap import best_ply, chain_flags
-    return best_ply(run, *chain_flags(project, paths))   # 메운 것 > 정리한 것 > 벽에 붙인 것 > splat.ply (설정·시각 확인)
+    """유효한 재학습 결과(train/<run>/finetune/splat_ft.ply) > fill/holes_backdrop.ply > 최신 학습 (_2, _3 ...) 의
+    메운 것 > 정리한 것 > 벽에 붙인 것 > splat.ply (설정·시각·입력 확인, stages/finetune.section_ply)."""
+    from .finetune import section_ply as pick
+    return pick(project, paths)
 
 
 def read_layout(path: Path, names: list[str]) -> tuple[dict[str, np.ndarray], list[str]]:

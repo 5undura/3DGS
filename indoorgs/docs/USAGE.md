@@ -65,15 +65,25 @@ GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있
 ## 7. 실행
 
 **실행** 화면 → **전체 실행** (또는 구간별, "~까지"로 중간에서 멈추기).
-순서: 프레임 추출 → (동선 위치) → 정합 → 진단(순간이동 사진 빼기) → (벽 면 맞추기·초기 점 심기) → 학습 → (벽에 붙이기) → 보강(바닥·천장 구멍) → 합치기 → 보고서.
+순서: 프레임 추출 → (동선 위치) → 정합 → 진단(순간이동 사진 빼기) → (벽 면 맞추기·초기 점 심기) → 학습 → (벽에 붙이기) → 정리 → 보강(바닥·천장 구멍) → 짧은 재학습 → 합치기 → 보고서.
 - 괄호 단계는 공간 + 동선이 있어 도면 좌표로 정합됐을 때만 돎. 벽 평탄화는 `project.yaml` 의 `walls:` 로 끄고 켬.
   **기본값 (11-28, `experiments/wall_ab/RESULTS2.md`)**: `enabled`·`seed` 켬 (면 맞추기 + 면 위 초기 점 = 확실한 이득),
-  학습 뒤 단계 `snap`·`repair`·`remove_behind`·`flatten` 은 **끔** (학습된 스플랫을 직접 고치면 PSNR 이 떨어짐).
-  켜려면 `walls: {snap: true}` (옮기기만, `flatten: true` 면 납작하게도), `repair: true` (snap 필요). 원본 `splat.ply` 는 그대로 두고 `splat_walls.ply` 를 따로 만듦.
+  `repair`·`remove_behind` 는 **끔**. `snap`·`flatten`(벽에 붙이고 납작하게)은 안 적으면 **짧은 재학습(finetune)이 켜져 있고 학습기가 Brush 이고 seed 가 켜졌을 때만 켬**
+  (학습된 스플랫을 고치기만 하면 PSNR 이 떨어지지만, 고친 뒤 재학습하면 raw + 같은 재학습보다 나음: RESULTS2 E). 직접 `walls: {snap: false}` 처럼 적으면 그 값을 씀.
+  `repair: true` 는 snap 필요. 원본 `splat.ply` 는 그대로 두고 `splat_walls.ply` 를 따로 만듦.
   `trust_plan_dims: true` (기본 끔): 줄자 도면 치수를 믿을 때만 — 점이 없어 못 맞춘 벽을 맞춘 평행 벽 + 도면 폭으로 추정
+  `scale_search` (기본 켬): 마주 보는 맞춘 면 쌍으로 모델 축척/도면 축척을 재서 (2% 넘게 다르면 로그·보고서에 **축척 경고**, `walls\planes.json` `scale_check`)
+  그 축척으로 먼 끝 벽을 먼저 옮긴 뒤 거리에 비례해 넓혀(최대 1.5 m) 다시 맞춤 (`source: "fit_scaled"`). 이 면에는 기본으로 초기 점을 안 심음 (`seed_scaled: true` 로 켬)
+- 진단: 직접 맞춘 정합이면 "동선에서 멂" 문턱 = 맞춤 잔차 중앙값 x 5 (1~2 m, `diagnose.json` `far_from_prior_threshold`).
+  모델이 뒤집혀 있으면(카메라 위 방향이 아래) 진단이 **실패**하고 `data_clean` 을 만들지 않음 → `register: {pair_verify: true}` 로 다시 정합
 - 학습 후 정리(`cleanup`, snap 뒤·repair 앞)는 모든 구간에서 돎. 기본은 방 안 부유물 지우기(`floaters`)만 →
   `splat_clean.ply`, 지운 것은 `removed_clean.ply` 로 열어 확인. 다른 단계(아주 큰 스플랫 `huge`, 바늘형 쪼개기 `needles`, SH 색 튐 `sh`)는
   `project.yaml` 의 `cleanup: {steps: [floaters, huge, needles, sh]}` 처럼 넣어서 켬. 바늘 쪼개기는 스플랫 수가 늘어남 (합성 장면 바늘 11~16% 에서 +77~112%)
+- 짧은 재학습(`finetune`, 보강 뒤·합치기 앞, 기본 켬, Brush 만): 후처리한 PLY 에서 원래 반복 번호부터 1000 반복 더 학습
+  (늘리기 없음, 학습률 고정) → `train\<run>\finetune\splat_ft.ply`. 합치기는 이것을 씀 (입력·설정이 바뀌면 다시 재학습).
+  `project.yaml`: `finetune: {enabled: true, iters: 1000, lr_mean: 1.0e-6, lr_scale: 6.0e-3, refine: false}`. 끄려면 `enabled: false`.
+  LichtFeld 는 밀도 조절을 끄는 확인된 옵션이 없어 건너뜀. **PC 에서 `brush_app.exe --help` 에 `--start-iter`, `--lr-mean`, `--lr-mean-end`,
+  `--lr-scale`, `--lr-scale-end`, `--growth-stop-iter`, `--refine-every` 가 있는지 확인** (없으면 이 단계가 멈추고 알려 줌).
 - 정합(공간 + 동선이 있을 때): **두 번 정합 + 동선 자세로 짝 검증**이 기본 (`register: {pair_verify: true}`).
   앞뒤 사진 짝만으로 1차 정합 → 동선 12 m 안의 후보 짝 추가 → 1차 자세와 안 맞는 짝(복도 양 끝이 비슷해 생기는 가짜 짝)을 DB 사본에서 지움 → 2차 정합 → 수평 맞추고 도면에 맞춤.
   합성 복도에서 접힘·순간이동이 없어짐 (`experiments/prior_matching/RESULTS.md`). 정합 시간은 대략 두 배.
@@ -86,7 +96,7 @@ GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있
 ## 8. 결과 확인
 
 - **결과** 화면 = `report.html`: 구간별 프레임 수, 정합 장수, PSNR, 반투명 비율, 도면 위 카메라 위치
-- 구간 PLY: `sections\<구간>\train\<학습기>_<프리셋>\splat.ply` (벽에 붙인 것 `splat_walls.ply`, 정리한 것 `splat_clean.ply`, 메운 것 `splat_repaired.ply`), 구멍 메운 것 `sections\<구간>\fill\holes_backdrop.ply`
+- 구간 PLY: `sections\<구간>\train\<학습기>_<프리셋>\splat.ply` (벽에 붙인 것 `splat_walls.ply`, 정리한 것 `splat_clean.ply`, 메운 것 `splat_repaired.ply`), 구멍 메운 것 `sections\<구간>\fill\holes_backdrop.ply`, 재학습한 것 `...\train\<학습기>_<프리셋>\finetune\splat_ft.ply` (합치기가 쓰는 최종)
 - 건물 하나: `merged\building.ply`
 - 보기: [SuperSplat](https://superspl.at/editor) 에 PLY 끌어다 놓기 (브라우저, 무료). VR 은 Unity(AVT 저장소)에서
 

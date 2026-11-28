@@ -71,13 +71,15 @@ class WallsCfg:
     enabled: bool = True             # 정합 점으로 도면 면 위치 다시 맞추기 (walls/planes.json)
     seed: bool = True                # 면 위에 초기 점 심기 -> data_seed/ 로 학습 (흰 벽 구멍·안개)
     seed_spacing: float = 0.08       # 심는 점 간격 (m)
-    snap: bool = False               # 학습 후 벽 근처 스플랫을 면에 붙임 -> splat_walls.ply (wall_ab RESULTS2: 학습 뒤 붙이면 PSNR 손해 -> 기본 끔)
+    snap: bool = False               # 학습 후 벽 근처 스플랫을 면에 붙임 -> splat_walls.ply. 안 적으면 parse 가 finetune 켜짐(Brush)+seed 일 때만 켬 (RESULTS2: 재학습 없이 붙이면 손해)
     band: float = 0.03               # 면에서 이 거리(m) 안의 스플랫만 붙임 (액자 등 입체감 보호, 지운 의견 ±3 cm)
     color_tol: float = 0.12          # 그 자리 벽 색과 채널 최대 차이가 이보다 크면 안 붙임 (0..1, 벽에 붙은 물체 보호)
-    flatten: bool = False            # snap 때 법선 방향으로 납작하게도 (False = 면 위로 옮기기만; RESULTS2: 납작하게가 손해의 대부분)
+    flatten: bool = False            # snap 때 법선 방향으로 납작하게도 (False = 옮기기만). 안 적으면 snap 과 같은 규칙 (재학습과 함께면 납작하게가 이득, RESULTS2 E)
     remove_behind: bool = False      # snap 때 벽 뒤(문 구멍 아닌 곳) 부유물 지우기 (RESULTS2: 학습된 벽 일부를 지워 비침 -> 기본 끔)
     search: float = 0.30             # 도면 면에서 이 거리(m) 안의 정합 점으로 실제 면을 찾음
     trust_plan_dims: bool = False    # 줄자로 잰 도면 치수를 믿음: 점이 없어 못 맞춘 벽을 맞춘 평행 벽 + 도면 폭으로 추정 ("infer")
+    scale_search: bool = True        # 못 맞춘 먼 면(끝 벽)을 맞춘 면 축척으로 옮긴 뒤 거리에 비례해 넓혀 다시 찾음 ("fit_scaled", e2e_v4)
+    seed_scaled: bool = False        # "fit_scaled" 면에도 초기 점 심기 (넓힌 탐색이라 다른 면을 잡을 위험 -> 기본 끔)
     repair: bool = False             # snap 뒤 면에서 비치거나 빈 칸을 둘레 스플랫 복사로 메움 -> splat_repaired.ply (snap 필요, 기본 끔)
     repair_min_cover: float = 0.5    # 덮임(0..1)이 이보다 낮은 칸을 메움
     repair_max_hole_m2: float = 4.0  # 이보다 큰 구멍은 안 메움 (못 본 넓은 면을 지어내지 않도록)
@@ -95,6 +97,21 @@ class CleanupCfg:
     steps: list[str] = field(default_factory=lambda: ["floaters"])   # 차례대로 (CLEANUP_STEPS 중). RESULTS2: floaters 만 이득, 나머지는 영향 없음
 
 
+FINETUNE_TRAINERS = ("brush",)   # finetune 을 지원하는 학습기 (trainers/*.finetune_unsupported == "")
+
+
+@dataclass
+class FinetuneCfg:
+    """후처리(snap·cleanup·repair·fill) 뒤 짧은 재학습. stages/finetune.py. Brush 만 (LichtFeld 는 건너뜀).
+    처리한 PLY 를 init.ply 로 두고 원래 반복 번호에서 이어 iters 반복, 밀도 조절 없음, 위치·크기 학습률 고정.
+    wall_ab RESULTS2 E: 후처리 + 1000 반복 > raw + 같은 재학습 (600 반복 이상에서)."""
+    enabled: bool = True             # 켜면 merge 가 train/<run>/finetune/splat_ft.ply 를 씀 (유효할 때)
+    iters: int = 1000                # 300 은 후처리 손해를 다 못 메움 (RESULTS2 E)
+    lr_mean: float = 1e-6            # 위치 학습률 (시작 = 끝 = 이 값). Brush 기본 일정의 끝 값 (--lr-mean-end 기본)
+    lr_scale: float = 6e-3           # 크기 학습률 (시작 = 끝). Brush 기본 일정의 끝 값 (--lr-scale-end 기본)
+    refine: bool = False             # True 면 죽은 스플랫 지우고 다시 뽑기(Brush refine)는 둠. 늘리기는 어느 쪽이든 없음
+
+
 @dataclass
 class ProjectConfig:
     sections: list[Section]
@@ -106,6 +123,7 @@ class ProjectConfig:
     fill: FillCfg = field(default_factory=FillCfg)
     walls: WallsCfg = field(default_factory=WallsCfg)
     cleanup: CleanupCfg = field(default_factory=CleanupCfg)
+    finetune: FinetuneCfg = field(default_factory=FinetuneCfg)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -153,10 +171,31 @@ def parse(data: dict) -> ProjectConfig:
         fill=_build(FillCfg, data.get("fill"), "fill"),
         walls=_build(WallsCfg, data.get("walls"), "walls"),
         cleanup=_build(CleanupCfg, data.get("cleanup"), "cleanup"),
+        finetune=_build(FinetuneCfg, data.get("finetune"), "finetune"),
     )
-    extra = set(data) - {"sections", "tools", "gpu_profile", "extract", "register", "train", "fill", "walls", "cleanup"}
+    extra = set(data) - {"sections", "tools", "gpu_profile", "extract", "register", "train", "fill", "walls", "cleanup",
+                         "finetune"}
     if extra:
         raise ConfigError(f"모르는 최상위 항목 {sorted(extra)}")
+    ft = cfg.finetune
+    for k in ("lr_mean", "lr_scale"):          # PyYAML 은 1e-6 (점 없음) 을 글자로 읽음
+        v = getattr(ft, k)
+        if isinstance(v, str):
+            try:
+                setattr(ft, k, float(v))
+            except ValueError:
+                pass
+    if not isinstance(ft.iters, int) or ft.iters < 1 or not all(
+            isinstance(v, (int, float)) and v > 0 for v in (ft.lr_mean, ft.lr_scale)):
+        raise ConfigError(f"finetune: iters 는 1 이상 정수, lr_mean·lr_scale 은 0 보다 큰 수 ({ft})")
+    # walls.snap·flatten 을 project.yaml 에 안 적었으면 재학습 여부로 정함 (RESULTS2 E: snap+납작 은 재학습 없이 −4.4 dB,
+    # seed + 재학습과 함께면 raw+재학습보다 테스트 +0.24, 스침 +0.92 dB. seed 없으면 손해 -> seed 도 켜져 있어야).
+    # remove_behind·repair 는 그대로 끔 (적어 넣은 값은 항상 그대로)
+    ft_on = bool(ft.enabled and cfg.train.trainer in FINETUNE_TRAINERS and cfg.walls.seed)
+    given = data.get("walls") or {}
+    for k in ("snap", "flatten"):
+        if k not in given:
+            setattr(cfg.walls, k, ft_on)
     st = cfg.cleanup.steps
     if not isinstance(st, list) or any(x not in CLEANUP_STEPS for x in st) or len(set(st)) != len(st):
         raise ConfigError(f"cleanup.steps = {st!r}: {list(CLEANUP_STEPS)} 중에서 겹치지 않게 (목록)")

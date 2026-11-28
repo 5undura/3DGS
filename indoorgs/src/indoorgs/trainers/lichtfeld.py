@@ -18,6 +18,11 @@ EVAL_EVERY = 8
 
 class LichtFeld(TrainerAdapter):
     name = "lichtfeld"
+    # v0.5.4.3 소스(src/core/argument_parser.cpp): --init <ply> 로 고친 PLY 에서 시작은 되지만 일정(학습률·밀도 조절)이
+    # 0 부터 다시이고 밀도 조절을 끄는 CLI 옵션이 없음 (start_refine/stop_refine 는 --config json 에만, 전략별 동작 미확인).
+    # --resume 은 자기 체크포인트만. -> 안전한 '짧은 마무리 학습' 방법이 없어 finetune 은 건너뜀
+    finetune_unsupported = ("LichtFeld 는 밀도 조절을 끄고 고정 학습률로 이어 학습하는 확인된 옵션이 없음 "
+                            "(--init 은 일정을 0 부터 다시 시작) -> finetune 건너뜀")
     required_options = ["--strategy", "--max-cap", "--iter", "--sh-degree", "--max-width",
                         "--bg-mode", "--export", "--pose-opt", "--test-every", "--headless"]
 

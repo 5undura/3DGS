@@ -57,7 +57,10 @@ def _train_runs(sp, train_cfg=None) -> list[dict]:
                 continue
             runs.append({"name": d.name, "trainer": d.name.split("_")[0], "eval": ev, "stats": stt,
                          "ply": (d / "splat.ply").exists(), "latest": d == latest,
-                         "walls": _read(d / "walls.json"), "clean": _read(d / "clean.json")})
+                         "walls": _read(d / "walls.json"), "clean": _read(d / "clean.json"),
+                         "finetune": _read(d / "finetune" / "finetune.json"),
+                         "finetune_eval": _read(d / "finetune" / "eval.json"),
+                         "finetune_stats": _read(d / "finetune" / "stats.json")})
     return runs
 
 
@@ -199,7 +202,10 @@ def build_html(project) -> str:
         if dg:
             diag_notes.append(f"<li>{_e(s['name'])}: 재투영 오차 {_num(dg.get('reproj_error_px'), '{:.2f}')} px, "
                               f"순간이동 {len(dg.get('teleports', []))}, 공간 밖 {len(dg.get('outside_space', []))}, "
-                              f"동선에서 멂 {len(dg.get('far_from_prior', []))}</li>")
+                              f"동선에서 멂 {len(dg.get('far_from_prior', []))}"
+                              + (f" (문턱 {_num((dg.get('far_from_prior_threshold') or {}).get('m'), '{:.2f}')} m)"
+                                 if dg.get("far_from_prior_threshold") else "")
+                              + (f", <b>{_e(dg['failed'])}</b>" if dg.get("failed") else "") + "</li>")
     diag = "<ul>" + "".join(diag_notes) + "</ul>" if diag_notes else f"<p>{NONE}</p>"
 
     wall_notes = []
@@ -207,12 +213,14 @@ def build_html(project) -> str:
         pj = s.get("planes")
         if pj:
             fit = pj.get("fit", [])
-            nf = sum(1 for i in fit if i.get("source") == "fit")
+            nf = sum(1 for i in fit if i.get("source") in ("fit", "fit_scaled"))
             big = [i for i in fit if i.get("source") == "fit" and abs(i.get("shift_m") or 0) >= 0.05]
             txt = (f"{_e(s['name'])}: 면 {len(fit)}개 중 {nf}개를 정합 점으로 다시 맞춤"
                    + (f", 도면과 5cm 넘게 다른 면 " + ", ".join(f"{_e(i['id'])} {i['shift_m'] * 100:+.0f}cm" for i in big)
                       if big else "")
-                   + (f", 초기 점 {_num((pj.get('seed') or {}).get('n_added'))}개" if pj.get("seed") else ""))
+                   + (f", 초기 점 {_num((pj.get('seed') or {}).get('n_added'))}개" if pj.get("seed") else "")
+                   + (f", <b>축척 경고</b>: {_e((pj.get('scale_check') or {}).get('message'))}"
+                      if (pj.get("scale_check") or {}).get("warn") else ""))
             wall_notes.append(f"<li>{txt}</li>")
         for r in s["runs"]:
             w = r.get("walls")
@@ -235,6 +243,21 @@ def build_html(project) -> str:
                                    f"{where}): {_e(clean_summary(c))}</li>")
     clean_html = ("<ul>" + "".join(clean_notes) + "</ul>" if clean_notes else f"<p>{NONE}</p>")
 
+    ft_notes = []
+    for s in secs:
+        for r in s["runs"]:
+            f = r.get("finetune")
+            if f:
+                fe, fs = r.get("finetune_eval") or {}, r.get("finetune_stats") or {}
+                tr = fs.get("translucent_ratio")
+                ft_notes.append(
+                    f"<li>{_e(s['name'])} / {_e(r['name'])}: {_e(f.get('input'))} → finetune/splat_ft.ply, "
+                    f"반복 {_num(f.get('start_iter'))} → {_num(f.get('end_iter'))}, 스플랫 {_num(f.get('count_before'))} → "
+                    f"{_num(fs.get('count'))}, 반투명 {_num((f.get('translucent_before') or 0) * 100, '{:.1f}')} → "
+                    f"{_num(tr * 100 if tr is not None else None, '{:.1f}')}%, PSNR {_num(f.get('psnr_train'), '{:.2f}')} (학습) → "
+                    f"{_num(fe.get('psnr'), '{:.2f}')}</li>")
+    ft_html = ("<ul>" + "".join(ft_notes) + "</ul>" if ft_notes else f"<p>{NONE}</p>")
+
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""<!DOCTYPE html>
 <html lang="ko"><head><meta charset="utf-8"><title>IndoorGS 보고서 · {_e(project.root.name)}</title>
@@ -246,6 +269,8 @@ def build_html(project) -> str:
 <h2>벽 평탄화</h2>{walls_html}
 <h2>학습 후 정리</h2>{clean_html}
 <p class="sub">지운 스플랫은 학습 폴더의 removed_clean.ply 로 열어 확인. 바늘 쪼개기로 스플랫 수가 늘어남.</p>
+<h2>후처리 뒤 재학습</h2>{ft_html}
+<p class="sub">merge 는 설정·입력이 지금과 같은 splat_ft.ply 만 씀 (입력이 바뀌면 다시 재학습).</p>
 <h2>공간과 카메라 위치</h2>{space}
 <h2>합치기</h2><p>{merged}</p>
 </body></html>

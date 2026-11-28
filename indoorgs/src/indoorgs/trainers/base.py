@@ -32,6 +32,9 @@ class TrainerInfo:
 class TrainerAdapter:
     name = "?"
     required_options: list[str] = []   # --help 출력에 있어야 하는 옵션
+    # 후처리 뒤 짧은 재학습 (stages/finetune.py). 지원하면 finetune_options (--help 에 있어야 함) 와 finetune_command 를 채움
+    finetune_options: list[str] = []
+    finetune_unsupported: str = "후처리 뒤 재학습(finetune)을 지원하지 않음"   # 지원하면 ""
 
     def presets(self) -> dict[str, Preset]:
         raise NotImplementedError
@@ -41,6 +44,11 @@ class TrainerAdapter:
 
     def find_result(self, out_dir: Path) -> Path | None:
         raise NotImplementedError
+
+    def finetune_command(self, exe: str, data_dir: Path, out_dir: Path, preset: Preset, start_iter: int,
+                         iters: int, lr_mean: float, lr_scale: float, refine: bool) -> list[str]:
+        """data_dir 안의 init.ply 에서 시작해 start_iter -> start_iter + iters 반복. 밀도 조절 없음, 학습률 고정."""
+        raise NotImplementedError(self.finetune_unsupported)
 
     def evaluate(self, run_dir: Path, data_dir: Path) -> dict | None:
         """학습 결과 평가 -> eval.json 내용 (psnr, ssim, n_eval, eval_every). 평가가 없으면 None."""

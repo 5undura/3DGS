@@ -48,6 +48,7 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
     train/<trainer>_<preset>/splat_clean.ply  clean.json  removed_clean.ply   cleanup (학습 후 정리, 모든 구간)
     train/<trainer>_<preset>/splat_repaired.ply  repair.json  repair (면 메우기)
     fill/holes_backdrop.ply            fill
+    train/<trainer>_<preset>/finetune/splat_ft.ply  finetune.json  eval.json  stats.json  train_log.txt   finetune (후처리 뒤 짧은 재학습, Brush)
   merged/building.ply  merged/layout.json   merge
   report.html                               report
   logs/<section>_<stage>.log
@@ -57,7 +58,7 @@ indoorgs/                      이 폴더만 IndoorGS. 저장소의 기존 스�
 - 원본(영상, 이전 단계 결과)은 지우거나 덮어쓰지 않는다. 다시 돌리면 `train/brush_default_2`처럼 새 폴더.
   - `indoorgs run <proj> --rerun <단계>`(`run_all(rerun=)`)로만 다시 돈다. train 은 최신 폴더가 끝났으면 `_2`, `_3`… 새 폴더,
     다른 단계는 이전 결과(`Stage.prev_targets`)를 `<이름>_prev_<시각>`으로 옮긴 뒤 다시.
-  - fill·merge·report 는 `SectionPaths.latest_train_run(trainer, preset)` = splat.ply 가 있는 가장 큰 번호 폴더를 쓴다.
+  - fill·finetune·merge·report 는 `SectionPaths.latest_train_run(trainer, preset)` = splat.ply 가 있는 가장 큰 번호 폴더를 쓴다.
   - 취소: `run_all(cancel=threading.Event)` 단계 사이에서 멈추고 `runner.run` 중인 외부 프로그램을 끝냄 (GUI `POST /api/run/cancel`).
 - 실패한 단계의 출력 폴더는 `<이름>_failed_<시각>`으로 옆으로 치운다.
 
@@ -143,6 +144,10 @@ sequential(앞뒤 `seq_overlap`장, `quadratic_overlap 0`, 루프 검출 없음)
 ```
 
 `excluded`에 든 사진은 `data_clean/`에서 빠진다 (원본 `data/`는 그대로).
+- `far_from_prior_threshold` (priors 있을 때): `{"m", "basis"}`. `basis: "align_resid"` 이면 `register.json` `align.resid_median_m` x 5 를 1~2 m 로 자른 값
+  (`resid_median_m`, `k`, `min_m`, `cap_m` 함께), 아니면 `"default"` 1 m.
+- `orientation` (도면 좌표일 때만, 아니면 null): `{"up_z_median", "up_down_frac", "flipped", "mirrored", "tilted", "message"}`. 카메라 위 방향(-R 둘째 행)의 z 중앙값이
+  -0.5 미만(`flipped`)이거나 `align` 회전 행렬식 < 0(`mirrored`)이면 `"failed": "<이유>"` 를 적고 **단계 실패**, `data_clean/` 을 만들지 않으며 남은 것은 `data_clean_failed_<시각>` 으로 옮긴다. 0.7 미만은 `warnings` 만.
 
 ### walls/planes.json (walls가 씀), data_seed/
 
@@ -159,22 +164,38 @@ sequential(앞뒤 `seq_overlap`장, `quadratic_overlap 0`, 루프 검출 없음)
 - 면: `n·x = d`, n 은 방 안쪽. 벽은 방 다각형의 변 하나, 바닥·천장은 방 하나 (`walls/planes.py`).
 - `planes`는 정합 점으로 다시 맞춘 면(점이 모자라면 도면 그대로, `source: "plan"`), `plan_planes`는 도면 그대로.
 - `fit[].source`: `"fit"`(정합 점으로 맞춤; `relaxed`·`offset_only`·`n_front_excluded` 는 느슨한 기준·기울기 0·튀어나온 물체로 뺀 점 수),
-  `"infer"`(`walls.trust_plan_dims` 켰을 때만: 맞춘 평행 면 `inferred_from` 이 옮긴 만큼 옮김), `"plan"`(도면 그대로, `reason`).
-- `data_seed/`: `data_clean/`과 같은 사진(링크) + `sparse/0`에 면 위 초기 점(색은 사진에서, 트랙 없음)을 더한 모델. 초기 점은 맞춘 면(`fit[].source` 가 `"fit"` 또는 `"infer"`)에만.
+  `"fit_scaled"`(`walls.scale_search`: 1차에 못 맞춘 면을 카메라 중심 기준 축척으로 옮긴 뒤 `search_m` = search + 0.05 x 거리(최대 1.5 m) 안에서 같은 기준으로 맞춤;
+  `pred_shift_m`, `scale_used`, `shift_from_scaled_m`; 맞춘 면 뒤로 카메라가 2장·1% 넘게 나가면 버림),
+  `"infer"`(`walls.trust_plan_dims` 켰을 때만: 맞춘 평행 면 `inferred_from` 이 옮긴 만큼 옮김), `"plan"`(도면 그대로, `reason`, 2차 실패 이유 `reason_scaled`).
+- `scale_check`: 같은 방 마주 보는 면 쌍(벽 법선 방향 축 `x`·`y`·`<각>deg`, 바닥-천장 `z`)이 둘 다 `fit`/`fit_scaled` 일 때 `axes.<축>.ratio` = 맞춘 폭/도면 폭,
+  `scale` = Σ fit·plan / Σ plan², `warn` (1 에서 2% 넘게), `message`, `used_for_search` (`fit` 만으로 잰 값 = 2차 탐색에 쓴 축척). `scale_search`: 2차 시도·채택 기록.
+- `data_seed/`: `data_clean/`과 같은 사진(링크) + `sparse/0`에 면 위 초기 점(색은 사진에서, 트랙 없음)을 더한 모델. 초기 점은 맞춘 면(`fit[].source` 가 `"fit"` 또는 `"infer"`, `walls.seed_scaled` 면 `"fit_scaled"` 도)에만.
   train은 `data_seed` > `data_clean` > `data` 순으로 읽되, `data_seed`는 walls 가 이 구간에 적용(`walls.enabled`, 도면 좌표)되고 `walls.seed`가 켜져 있고
   `source_identity`(`{"n_images", "images_bin_sha1"}`, 만든 원본 모델)가 지금 `data_clean`(없으면 `data`) 모델과 같을 때만 쓴다.
-- snap·repair 는 맞춘 면(`fit`/`infer`)만 쓴다 (도면 그대로인 면은 실제 위치를 모름). 둘 다 기본 꺼짐 (`walls.snap`, `walls.repair`; repair 는 snap 필요).
+- snap·repair 는 맞춘 면(`fit`/`infer`)만 쓴다 (도면 그대로인 면은 실제 위치를 모름). repair 는 기본 꺼짐 (`walls.repair`, snap 필요).
+  `walls.snap`·`walls.flatten` 은 project.yaml 에 안 적으면 `config.parse` 가 정함: `finetune.enabled` + 학습기 brush + `walls.seed` 이면 켬, 아니면 끔 (적은 값은 그대로).
   repair 는 카메라가 있으면 학습 카메라 광선 덮임(면 뒤 0.5 m 까지)으로 구멍을 다시 확인한다 (`repair.json` `faces[].covered_by_rays_m2`). `--rerun` 이 앞 단계부터면 walls·snap·repair 는 적용 안 돼도 이전 결과를 `_prev_`로 옮긴다.
 - "도면 좌표인가"는 모든 단계에서 `stages.diagnose.model_in_plan_coords` (= `register.json` mapper 가 `pose_prior_mapper` 이거나 `aligned`) 하나로 판정한다.
 
 ### train/<run>/splat_walls.ply, walls.json (snap이 씀)
 
-`walls.snap` 이 켜졌을 때만 (기본 끔, 11-28). (`walls.remove_behind` 면) 벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안이고
+`walls.snap` 이 켜졌을 때만 (안 적으면 finetune 과 같이 켜짐, 위 참고). (`walls.remove_behind` 면) 벽 뒤(문 구멍 아닌 곳)·바닥 아래·천장 위 부유물을 지우고, 면에서 `walls.band` 안이고
 그 자리 벽 색(칸별 넓이 가중 중앙값)과 `walls.color_tol` 안인 스플랫을 면 위로 옮긴 (`walls.flatten` 이면 법선 방향으로 납작하게도 한) PLY. 속성 순서는 원본 그대로. `walls.json`에 붙인 수·지운 수·벽 평탄도(불투명 스플랫의 면까지 거리 RMS) 전후, 쓴 면(`planes_used`), 경고(`warnings`).
 불투명 스플랫 절반 넘게 도면 방 밖이면 PLY 없이 `walls.json`에 `"skipped": "<이유>"`만 쓴다.
 fill·merge는 `splat_repaired.ply` > `splat_clean.ply` > `splat_walls.ply` > `splat.ply` 중 설정이 켜져 있고 바로 앞 입력보다 새것을 쓴다
 (walls ≥ splat.ply, clean ≥ 그 입력(유효한 walls, 없으면 splat.ply), repaired ≥ 그 입력(유효한 clean, 없으면 walls)). `clean.json`·`repair.json`의
 `"input"`(입력 파일 이름)이 지금 고른 입력과 다르면(예: snap 이나 cleanup 을 끔) 그 결과도 안 쓴다 (`stages/snap.best_ply`).
+
+### train/<run>/finetune/ (finetune이 씀)
+
+fill 뒤·merge 앞, `finetune.enabled`(기본 켬)이고 학습기가 지원할 때만 (Brush; LichtFeld 는 밀도 조절을 끄는 확인된 방법이 없어 로그만 남기고 건너뜀).
+입력 = finetune 이 없을 때 merge 가 쓰는 PLY (`fill/holes_backdrop.ply` 있으면 그것, 없으면 best_ply). `finetune/data/` 에 `data_clean`(없으면 `data`)
+맨 위 항목을 링크(심볼릭 링크 > 정션 > 파일 하드 링크·복사)하고 입력을 `init.ply` 로 둔 보기 폴더를 만들어 Brush 에 줌 (원본 폴더는 안 건드림, 끝나면 폴더 링크만 지움).
+원래 반복 번호 N(`export_<N>.ply`)에서 `finetune.iters` 반복, 위치·크기 학습률 시작 = 끝 (`finetune.lr_mean`·`lr_scale`), 늘리기 없음,
+`finetune.refine` 이 false 면 지우고 다시 뽑기도 없음. `finetune.json`: `input`(구간 폴더 기준 경로), `input_mtime`, `input_size`, `config`
+(trainer, preset, iters, lr_mean, lr_scale, refine), `data`, `data_view`, `start_iter`, `end_iter`, `count_before`, `translucent_before`, `psnr_train`, `command`.
+merge 는 `splat_ft.ply` 가 설정 켜짐·학습기 지원·`input`/`input_mtime`/`input_size`/`config` 가 지금과 같음·입력보다 새것일 때만 쓰고
+(`stages/finetune.finetune_valid`), 아니면 그 입력을 쓴다. 다시 돌리면 이전 `finetune/` 은 `finetune_prev_<시각>`, 실패하면 `finetune_failed_<시각>`.
 
 ### train/<run>/splat_clean.ply, clean.json, removed_clean.ply (cleanup이 씀)
 
@@ -228,7 +249,8 @@ class TrainerAdapter:
     def find_result(self, out_dir) -> Path | None  # 최종 PLY
 ```
 
-`ctx`는 `StageContext(project, section, cfg, log)`. 단계 순서: extract → prior → register → diagnose → walls → train → snap → cleanup → repair → fill → (모든 구간 후) merge → report. `walls`·`snap`·`repair`는 도면 좌표 구간에서만, `cleanup`은 모든 구간에서 돈다 (`cleanup.enabled`). `prior`는 `plan.json`과 `path.json`이 둘 다 있을 때만 돈다.
+`ctx`는 `StageContext(project, section, cfg, log)`. 단계 순서: extract → prior → register → diagnose → walls → train → snap → cleanup → repair → fill → finetune → (모든 구간 후) merge → report. `walls`·`snap`·`repair`는 도면 좌표 구간에서만, `cleanup`은 모든 구간에서 돈다 (`cleanup.enabled`).
+`finetune`은 `finetune.enabled` 이고 학습기가 지원할 때 (`TrainerAdapter.finetune_unsupported == ""`, `finetune_options`·`finetune_command`). `prior`는 `plan.json`과 `path.json`이 둘 다 있을 때만 돈다.
 
 ## 6. 작업 규칙
 

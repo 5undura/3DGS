@@ -4,7 +4,9 @@
 1) 구간 카메라가 들어 있는 방의 벽·바닥·천장 면을 plan.json 에서 만들고 (walls/planes.py)
 2) 그 면 근처의 COLMAP 점으로 실제 면 위치를 다시 맞춘 뒤 (walls/refine.py, 줄자 도면 오차·축척 오차 흡수)
 3) 흰 벽처럼 점이 없는 면에 사진 색으로 초기 점을 심어 data_seed/ 를 만든다 (walls/seed.py).
-   맞춘 면(fit source "fit")에만 심음: 도면 그대로인 면은 실제 위치를 몰라 실제 벽 앞·뒤에 가짜 면을 만듦.
+   맞춘 면(fit source "fit"·"infer")에만 심음: 도면 그대로인 면은 실제 위치를 몰라 실제 벽 앞·뒤에 가짜 면을 만듦.
+   "fit_scaled"(축척으로 옮겨 넓힌 탐색으로 맞춘 먼 끝 벽, walls.scale_search)는 walls.seed_scaled 일 때만 (seed_sources).
+   planes.json scale_check: 마주 보는 맞춘 면 쌍의 맞춘 폭/도면 폭 (2% 넘게 다르면 경고, 동선 축척 오차).
    planes.json source_identity (사진 수 + images.bin sha1) 로 train 이 data_seed 가 지금 모델에서 나왔는지 확인.
    학습기는 data_seed/ 가 있으면 그걸 읽음 (stages/train.py). 원본 data/, data_clean/ 은 그대로.
 학습 뒤 벽에 붙이기는 stages/snap.py.
@@ -45,6 +47,13 @@ def model_identity(model_dir: Path) -> dict | None:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             h.update(chunk)
     return {"n_images": n_images, "images_bin_sha1": h.hexdigest()}
+
+
+def seed_sources(wc) -> tuple[str, ...]:
+    """초기 점을 심을 면의 fit source. "fit_scaled"(축척으로 옮겨 넓힌 탐색으로 맞춘 먼 면)는 walls.seed_scaled 일 때만:
+    점 기준(inlier·덮임·기울기)은 같지만 탐색 폭이 최대 1.5 m 라 유리문·가구 앞면·문 너머 벽을 잡았을 위험이 남고,
+    잘못 심은 면은 학습에 가짜 벽으로 굳음 (안 심으면 지금과 같음 = 손해 없음). snap·repair 도 이 면은 안 씀."""
+    return ("fit", "infer", "fit_scaled") if getattr(wc, "seed_scaled", False) else ("fit", "infer")
 
 
 def seed_usable(ctx: StageContext) -> tuple[bool, str]:
@@ -102,25 +111,36 @@ class Walls(Stage):
         planes = wp.planes_from_plan(plan, rooms)
         xyz = np.array([pt.xyz for pt in m.points.values()]) if m.points else np.zeros((0, 3))
         w = np.array([len(pt.track) for pt in m.points.values()], float) if m.points else None
+        rep: dict = {}
         fitted, info = refine.refine_planes(planes, xyz, weights=w, search=wc.search,
-                                            trust_plan_dims=wc.trust_plan_dims)
-        trusted = [q for q, i in zip(fitted, info) if i.get("source") in ("fit", "infer")]   # 초기 점은 맞춘 면에만
+                                            trust_plan_dims=wc.trust_plan_dims, scale_search=wc.scale_search,
+                                            centers=centers, report=rep)
+        trusted = [q for q, i in zip(fitted, info) if i.get("source") in seed_sources(wc)]   # 초기 점은 맞춘 면에만
         before = refine.flatness(xyz, planes)
         after = refine.flatness(xyz, fitted)
-        n_fit = sum(1 for i in info if i.get("source") in ("fit", "infer"))
+        n_fit = sum(1 for i in info if i.get("source") in ("fit", "infer", "fit_scaled"))
         ctx.log(f"방 {rooms}: 면 {len(planes)}개 중 {n_fit}개를 정합 점으로 다시 맞춤")
         for i in info:
-            if i.get("source") == "fit" and abs(i.get("shift_m", 0)) >= 0.05:
-                ctx.log(f"  {i['id']}: 도면보다 {i['shift_m'] * 100:+.0f}cm, 기울기 {i.get('tilt_deg', 0):.1f}도")
+            if i.get("source") in ("fit", "fit_scaled") and abs(i.get("shift_m", 0)) >= 0.05:
+                tag = " (축척으로 옮겨 넓힌 탐색)" if i["source"] == "fit_scaled" else ""
+                ctx.log(f"  {i['id']}: 도면보다 {i['shift_m'] * 100:+.0f}cm, 기울기 {i.get('tilt_deg', 0):.1f}도{tag}")
+        # 축척 확인: 2차 탐색에 쓴 것(fit 만)과 최종(fit + fit_scaled, 먼 끝 벽 쌍까지)
+        sc = refine.scale_check(planes, fitted, info, sources=("fit", "fit_scaled"))
+        sc["used_for_search"] = rep.get("scale_check", {}).get("scale")
+        if sc["warn"]:
+            ctx.log("경고: " + sc["message"])
         p.walls.mkdir(parents=True, exist_ok=True)
         out = {"version": schemas.VERSION, "rooms": rooms, "source_model": src.name,
                "source_identity": model_identity(src / "sparse" / "0"),
                "planes": [wp.plane_to_json(q) for q in fitted],
                "plan_planes": [wp.plane_to_json(q) for q in planes],
-               "fit": info, "room_widths": refine.room_widths(planes, fitted),
+               "fit": info, "room_widths": refine.room_widths(planes, fitted), "scale_check": sc,
+               "scale_search": rep.get("scale_search"),
                "points_flatness_before": before, "points_flatness_after": after}
 
         msg = f"면 {len(planes)}개 (맞춤 {n_fit})"
+        if sc["warn"]:
+            msg += f", 축척 경고 {sc['scale']:.3f}"
         if wc.seed:
             seed_dir = p.data_seed
             if seed_dir.exists():

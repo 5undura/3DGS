@@ -18,6 +18,13 @@
   덮임(coverage): 면을 cell 크기 격자로 나눠 면 안(contains_uv) 칸 중 inlier 가 있는 칸 비율.
   모서리 띠(edge_band, 바깥 경계에서 0.15 m) 안의 점은 이웃 면과 섞이므로 맞추기·덮임에 안 씀.
   inlier < min_points 또는 coverage < min_coverage 또는 |shift| ≥ 0.9·search 면 도면 면 그대로 (source "plan").
+
+축척 확인·먼 면 다시 찾기 (e2e_v4 제안 1·2, scale_search)
+  scale_check: 마주 보는 면이 둘 다 맞춰졌으면 축(벽 법선 방향 x·y·.., 바닥-천장 z)마다 맞춘 폭/도면 폭.
+  전체 축척 s = Σ fit·plan / Σ plan² (줄자 오차는 cm 단위라 긴 쌍에 무게). |s-1| 또는 축 비율이 SCALE_WARN 넘으면 경고.
+  그 뒤 못 맞춘 면만 2차: 도면 면을 카메라 중심 c 기준으로 s 배 옮긴 면(_scaled_plane) 둘레에서
+  search + scale_tol·(c 에서 면까지 거리) (최대 max_search) 안 점으로 같은 기준(inlier·덮임·기울기, 안 되면 느슨한 기준)으로 맞춤.
+  카메라가 맞춘 면 뒤(방 밖)에 있으면 버림. 받은 면은 source "fit_scaled" (초기 점·snap 에는 기본으로 안 씀).
 """
 from __future__ import annotations
 
@@ -27,7 +34,13 @@ import numpy as np
 
 from .planes import Plane, WALL, better_face
 
-__all__ = ["assign_points", "refine_planes", "room_widths", "flatness", "face_coverage", "edge_distance"]
+__all__ = ["assign_points", "refine_planes", "room_widths", "flatness", "face_coverage", "edge_distance",
+           "scale_check", "SCALE_WARN"]
+
+SCALE_WARN = 0.02          # 맞춘 폭/도면 폭이 1 에서 이보다 멀면 축척 경고 (e2e_v4: 0.913)
+MAX_SCALE_DEV = 0.15       # 이보다 먼 축척은 잘못 맞춘 면 탓으로 보고 먼 면 2차 탐색에 안 씀 (넓힌 탐색만)
+CAM_BEHIND_MARGIN = 0.05   # 2차로 맞춘 면 뒤(방 밖)로 이만큼(m) 넘게 나간 카메라가
+CAM_BEHIND_MAX_FRAC = 0.01  # 이 비율(그리고 2장) 넘으면 그 면은 버림 (카메라 동선을 가로지르는 가짜 면)
 
 
 def assign_points(planes: list[Plane], xyz: np.ndarray, search: float = 0.30, uv_margin: float = 0.10) -> np.ndarray:
@@ -378,6 +391,28 @@ def _fit_plane(p: Plane, P: np.ndarray, w: np.ndarray, *, relaxed: bool, inlier_
     return p.shifted(a0, n_new), info
 
 
+def _drop_edge_on_neighbours(p: Plane, k: int, sel: np.ndarray, xyz: np.ndarray, fit1, band_k: float,
+                             edge_band: float, inlier_thr: float, uv_margin: float) -> None:
+    """sel(면 k 의 점 마스크)에서 모서리 띠 band_k 안 점은 늘 빼고, edge_band 안 점은 이미 맞춘 이웃 면(fit1 = [(면, 번호)])
+    위(±inlier_thr)에 있으면 그 면 것으로 보고 뺌 (제자리 수정). 걸레받이·문틀처럼 이웃 면에서 떨어진 점은 남음."""
+    if not sel.any():
+        return
+    j = np.flatnonzero(sel)
+    ed = edge_distance(p, p.uv(xyz[j]))
+    drop = ed < band_k
+    mid = np.flatnonzero((ed < edge_band) & ~drop)
+    for q, kq in fit1:
+        if kq == k:
+            continue
+        if len(mid) == 0:
+            break
+        X = xyz[j[mid]]
+        on = (np.abs(q.signed_dist(X)) < inlier_thr) & q.contains_uv(q.uv(X), uv_margin)
+        drop[mid[on]] = True
+        mid = mid[~on]
+    sel[j[drop]] = False
+
+
 def _infer_from_neighbours(k: int, planes: list[Plane], out: list[Plane], infos: list[dict], xyz: np.ndarray,
                            owner: np.ndarray, *, max_dev: float, inlier_thr: float, max_angle_deg: float = 2.0,
                            min_overlap: float = 0.3) -> tuple[Plane | None, dict]:
@@ -429,6 +464,162 @@ def _infer_from_neighbours(k: int, planes: list[Plane], out: list[Plane], infos:
     return p.shifted(shift), info
 
 
+def _axis_label(n: np.ndarray, tol_deg: float) -> str:
+    """수평 법선의 축 이름: x (도면 가로), y (도면 세로), 아니면 '<각>deg' (0~180, tol_deg 단위로 묶음)."""
+    ang = math.degrees(math.atan2(float(n[1]), float(n[0]))) % 180.0
+    if min(ang, 180.0 - ang) <= tol_deg:
+        return "x"
+    if abs(ang - 90.0) <= tol_deg:
+        return "y"
+    return f"{round(ang / tol_deg) * tol_deg:.0f}deg"
+
+
+def scale_check(planes: list[Plane], fitted: list[Plane], infos: list[dict], *, sources=("fit",),
+                tol: float = SCALE_WARN, axis_tol_deg: float = 10.0) -> dict:
+    """마주 보는 면 쌍(같은 방, 법선 반대)이 둘 다 sources 로 맞춰졌을 때 맞춘 폭/도면 폭 = 모델 축척/도면 축척.
+    벽 쌍은 법선 방향으로 축(x, y, '<각>deg'), 바닥-천장은 z. 축별·전체 비율 = Σ fit·plan / Σ plan² (긴 쌍에 무게).
+    돌려줌 {"scale", "plan_over_fit", "axes": {축: {"ratio", "n_pairs", "plan_m"}}, "pairs", "tol", "warn", "message"}.
+    scale 은 쌍이 없으면 None. ("infer" 면은 맞춘 면의 이동을 그대로 옮긴 것이라 폭이 늘 도면과 같아 쓰지 않음.)"""
+    src = {i["id"]: i.get("source") for i in infos}
+    after = {q.id: q for q in fitted}
+    ok = lambda pid: src.get(pid) in sources  # noqa: E731
+    pairs = []
+    for r in room_widths(planes, fitted):
+        if ok(r["a"]) and ok(r["b"]):
+            a = next(p for p in planes if p.id == r["a"])
+            pairs.append({**r, "axis": _axis_label(a.n, axis_tol_deg)})
+    rooms = sorted({p.room for p in planes})
+    for room in rooms:
+        fl = [p for p in planes if p.room == room and p.kind == "floor"]
+        ce = [p for p in planes if p.room == room and p.kind == "ceiling"]
+        if not fl or not ce or not ok(fl[0].id) or not ok(ce[0].id):
+            continue
+        f0, c0 = fl[0], ce[0]
+        cen = f0.point(f0.size[0] / 2, f0.size[1] / 2)
+        plan_h = float(c0.signed_dist(cen))
+        f1, c1 = after[f0.id], after[c0.id]
+        fit_h = float(c1.signed_dist(f1.point(f1.size[0] / 2, f1.size[1] / 2)))
+        if plan_h > 0:
+            pairs.append({"room": room, "a": f0.id, "b": c0.id, "plan_m": plan_h, "fit_m": fit_h,
+                          "ratio": fit_h / plan_h, "axis": "z"})
+    axes: dict = {}
+    for q in pairs:
+        ax = axes.setdefault(q["axis"], {"fp": 0.0, "pp": 0.0, "n_pairs": 0, "plan_m": 0.0})
+        ax["fp"] += q["fit_m"] * q["plan_m"]
+        ax["pp"] += q["plan_m"] ** 2
+        ax["n_pairs"] += 1
+        ax["plan_m"] = max(ax["plan_m"], q["plan_m"])
+    out_axes = {k: {"ratio": v["fp"] / v["pp"], "n_pairs": v["n_pairs"], "plan_m": v["plan_m"]} for k, v in axes.items()}
+    pp = sum(v["pp"] for v in axes.values())
+    sc = (sum(v["fp"] for v in axes.values()) / pp) if pp > 0 else None
+    bad = [k for k, v in out_axes.items() if abs(v["ratio"] - 1) > tol]
+    warn = sc is not None and (abs(sc - 1) > tol or bool(bad))
+    msg = ""
+    if sc is None:
+        msg = "마주 보는 면이 둘 다 맞춰진 쌍 없음 (축척 확인 못 함)"
+    elif warn:
+        msg = (f"모델 축척이 도면과 다름: 맞춘 폭/도면 폭 {sc:.3f} ("
+               + ", ".join(f"{k} {v['ratio']:.3f}" for k, v in sorted(out_axes.items()))
+               + f", 허용 ±{tol * 100:.0f}%). 동선(priors) 축척 또는 도면 치수 확인. 학습엔 영향 없고 도면·Unity 배치 치수에 남음")
+    return {"scale": sc, "plan_over_fit": (1.0 / sc) if sc else None, "axes": out_axes,
+            "pairs": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in q.items()} for q in pairs],
+            "sources": list(sources), "tol": tol, "warn": bool(warn), "message": msg}
+
+
+def _scaled_plane(p: Plane, c: np.ndarray, s: float) -> Plane:
+    """도면 면을 점 c 기준 s 배 닮음으로 옮긴 면 (법선 그대로, 원점·크기·문 구멍·다각형도 s 배)."""
+    c = np.asarray(c, float)
+    o = c + s * (p.origin - c)
+    holes = [tuple(float(s * x) for x in h) for h in p.holes]
+    poly = None if p.polygon is None else [(float(c[0] + s * (x - c[0])), float(c[1] + s * (y - c[1])))
+                                           for x, y in p.polygon]
+    return Plane(p.id, p.kind, p.room, p.n.copy(), float(p.n @ o), o, p.U.copy(), p.V.copy(),
+                 (s * p.size[0], s * p.size[1]), holes, poly)
+
+
+def _scaled_pass(planes, out, infos, xyz, w_all, centers, kw, *, search, scale, scale_tol, max_search, edge_band,
+                 relax_edge_band, relaxed, inlier_thr, uv_margin) -> dict:
+    """못 맞춘 면(source "plan")을 축척으로 옮긴 위치 둘레에서 넓힌 탐색으로 다시 맞춤 (제자리로 out·infos 수정).
+    돌려줌: 이번에 쓴 설정 기록."""
+    if centers is not None and len(centers):
+        c = np.median(np.asarray(centers, float).reshape(-1, 3), axis=0)
+        c_from = "cameras"
+    else:
+        c = np.median(xyz, axis=0) if len(xyz) else np.zeros(3)
+        c_from = "points"
+    s = 1.0 if scale is None or abs(scale - 1) > MAX_SCALE_DEV else float(scale)
+    used = {"scale": s, "centre": [round(float(v), 3) for v in c], "centre_from": c_from, "scale_tol": scale_tol,
+            "max_search_m": max_search, "tried": [], "accepted": []}
+    if scale is not None and s != scale:
+        used["scale_ignored"] = f"추정 축척 {scale:.3f} 이 1 에서 {MAX_SCALE_DEV * 100:.0f}% 넘게 멂 -> 1 로 (넓힌 탐색만)"
+    normals = np.array([q.n for q in out], float)
+    for k, p in enumerate(planes):
+        if infos[k]["source"] != "plan":
+            continue
+        dist = float(p.signed_dist(c))
+        if dist <= 0:
+            continue
+        search_k = min(max_search, search + scale_tol * dist)
+        pred = (1 - s) * dist                     # 축척으로 예상한 안쪽 이동 (m)
+        if search_k <= search * 1.05 and abs(pred) < 0.1 * search:
+            continue
+        p2 = _scaled_plane(p, c, s)
+        sd2 = p2.signed_dist(xyz)
+        cand = np.flatnonzero(np.abs(sd2) < search_k)
+        if len(cand):
+            cand = cand[p2.contains_uv(p2.uv(xyz[cand]), uv_margin)]
+        # 다른 면(맞춘 면은 맞춘 위치)에 더 가까운 점은 그 면 것 (공유 벽은 어느 쪽인지로)
+        for j, q in enumerate(out):
+            if j == k or len(cand) == 0:
+                continue
+            X = xyz[cand]
+            sdq = q.signed_dist(X)
+            near_q = (np.abs(sdq) < search) & q.contains_uv(q.uv(X), uv_margin)
+            q_wins = near_q & ~better_face(sd2[cand], p.n, sdq, np.repeat(normals[j][None], len(cand), 0),
+                                           np.ones(len(cand), bool))
+            cand = cand[~q_wins]
+        sel = np.zeros(len(xyz), bool)
+        sel[cand] = True
+        sel0 = sel.copy()
+        if edge_band > 0 and sel.any():
+            j = np.flatnonzero(sel)
+            sel[j[edge_distance(p2, p2.uv(xyz[j])) < edge_band]] = False
+        kw2 = {**kw, "search": search_k}
+        rec = {"id": p.id, "search_m": round(search_k, 3), "pred_shift_m": round(pred, 3), "n_points": int(sel0.sum())}
+        fitted, info = _fit_plane(p2, xyz[sel], w_all[sel], relaxed=False, **kw2)
+        band_used = edge_band
+        if fitted is None and relaxed and not info.get("at_bound"):
+            sel = sel0.copy()
+            band_used = min(edge_band, relax_edge_band)
+            fit1 = [(q, kq) for kq, q in enumerate(out) if infos[kq]["source"] in ("fit", "fit_scaled")]
+            _drop_edge_on_neighbours(p2, k, sel, xyz, fit1, band_used, edge_band, inlier_thr, uv_margin)
+            fitted, info = _fit_plane(p2, xyz[sel], w_all[sel], relaxed=True, **kw2)
+        if fitted is not None and centers is not None and len(centers):
+            sdc = fitted.signed_dist(np.asarray(centers, float).reshape(-1, 3))
+            n_behind = int((sdc < -CAM_BEHIND_MARGIN).sum())
+            if n_behind > max(2, CAM_BEHIND_MAX_FRAC * len(sdc)):
+                info["reason"] = f"맞춘 면 뒤(방 밖)에 카메라 {n_behind}장 -> 가짜 면으로 보고 버림"
+                fitted = None
+        if fitted is None:
+            rec["reason"] = info.get("reason")
+            infos[k]["reason_scaled"] = info.get("reason")
+            used["tried"].append(rec)
+            continue
+        c_plan = p.point(p.size[0] / 2, p.size[1] / 2)
+        total = -float(fitted.signed_dist(c_plan))   # 도면 면 가운데에서 잰 안쪽 이동
+        infos[k] = {**{x: infos[k][x] for x in ("id", "kind", "room", "n_assigned")}, **info,
+                    "edge_band": band_used, "source": "fit_scaled", "shift_m": total,
+                    "shift_from_scaled_m": info.get("shift_m"), "pred_shift_m": pred, "search_m": search_k,
+                    "scale_used": s}
+        infos[k].pop("reason", None)
+        out[k] = fitted
+        normals[k] = fitted.n
+        rec.update(shift_m=round(total, 3), coverage=info.get("coverage"), tilt_deg=round(info.get("tilt_deg", 0), 2))
+        used["tried"].append(rec)
+        used["accepted"].append(p.id)
+    return used
+
+
 def refine_planes(planes: list[Plane], xyz: np.ndarray, *, weights: np.ndarray | None = None,
                   search: float = 0.30, max_tilt_deg: float = 3.0, min_points: int = 40,
                   min_coverage: float = 0.25, uv_margin: float = 0.10, inlier_thr: float = 0.03,
@@ -436,6 +627,8 @@ def refine_planes(planes: list[Plane], xyz: np.ndarray, *, weights: np.ndarray |
                   relax_edge_band: float = 0.05, relax_min_points: int = 20, relax_min_coverage: float = 0.08,
                   relax_max_se: float = 0.004, relax_min_span: float = 0.6, relax_min_inlier_frac: float = 0.6,
                   trust_plan_dims: bool = False, infer_max_dev: float = 0.015,
+                  scale_search: bool = False, centers: np.ndarray | None = None, scale_tol: float = 0.05,
+                  max_search: float = 1.5, report: dict | None = None,
                   rng=0) -> tuple[list[Plane], list[dict]]:
     """도면 면 -> 점에 맞춘 면. 맞출 수 없는 면은 도면 면 그대로 (info["source"] == "plan").
 
@@ -447,7 +640,13 @@ def refine_planes(planes: list[Plane], xyz: np.ndarray, *, weights: np.ndarray |
       면 가로 또는 세로의 relax_min_span 이상에 퍼져 있을 때만 받음 (info["relaxed"]). 점이 한 줄에만 있으면
       (가로·세로 중 하나가 면의 절반 미만) 기울기 0 으로 이동량만 (info["offset_only"]).
     - trust_plan_dims (기본 끔, 줄자 도면을 믿을 때만): 그래도 못 맞춘 면을 맞춘 평행 면(마주 보는 벽, 공유 벽)이
-      옮겨 간 만큼 옮김 (source "infer", info["inferred_from"]). 면에 점이 조금 있고 추정과 다르면 안 함 (plan 유지)."""
+      옮겨 간 만큼 옮김 (source "infer", info["inferred_from"]). 면에 점이 조금 있고 추정과 다르면 안 함 (plan 유지).
+
+    e2e_v4 (축척 확인·먼 면):
+    - report 에 dict 를 주면 "scale_check"(맞춘 면 "fit" 만으로 잰 축척, 2차 탐색에 씀)를 채움.
+    - scale_search (기본 끔, 단계는 walls.scale_search 로 켬): 그래도 "plan" 인 면을 카메라 중심(centers 중앙값, 없으면 점
+      중앙값) 기준 축척으로 옮긴 뒤 search + scale_tol·거리 (최대 max_search) 안에서 같은 기준으로 다시 맞춤
+      (source "fit_scaled", infer 보다 먼저). report["scale_search"] 에 시도·채택 기록."""
     xyz = np.asarray(xyz, float).reshape(-1, 3)
     w_all = np.ones(len(xyz)) if weights is None else np.asarray(weights, float).reshape(-1)
     rng = np.random.default_rng(rng)
@@ -478,23 +677,7 @@ def refine_planes(planes: list[Plane], xyz: np.ndarray, *, weights: np.ndarray |
                 continue
             sel = owner == k
             band_k = min(edge_band, relax_edge_band)
-            if sel.any():
-                j = np.flatnonzero(sel)
-                ed = edge_distance(p, p.uv(xyz[j]))
-                drop = ed < band_k
-                # 모서리 띠(edge_band) 안 점은 이미 맞춘 이웃 면 위(±inlier_thr)에 있으면 그 면 것으로 보고 뺌.
-                # 걸레받이·문틀처럼 이웃 면에서 떨어진 점은 남음.
-                mid = np.flatnonzero((ed < edge_band) & ~drop)
-                for q, kq in fit1:
-                    if kq == k:
-                        continue
-                    if len(mid) == 0:
-                        break
-                    X = xyz[j[mid]]
-                    on = (np.abs(q.signed_dist(X)) < inlier_thr) & q.contains_uv(q.uv(X), uv_margin)
-                    drop[mid[on]] = True
-                    mid = mid[~on]
-                sel[j[drop]] = False
+            _drop_edge_on_neighbours(p, k, sel, xyz, fit1, band_k, edge_band, inlier_thr, uv_margin)
             fitted, info = _fit_plane(p, xyz[sel], w_all[sel], relaxed=not was_fit, **kw)
             if fitted is None:
                 if not was_fit:
@@ -504,6 +687,16 @@ def refine_planes(planes: list[Plane], xyz: np.ndarray, *, weights: np.ndarray |
                         "edge_band": band_k, "source": "fit"}
             infos[k].pop("reason", None)
             out[k] = fitted
+    sc = scale_check(planes, out, infos)
+    if report is not None:
+        report["scale_check"] = sc
+    if scale_search:
+        used = _scaled_pass(planes, out, infos, xyz, w_all, centers, kw, search=search, scale=sc["scale"],
+                            scale_tol=scale_tol, max_search=max_search, edge_band=edge_band,
+                            relax_edge_band=relax_edge_band, relaxed=relaxed, inlier_thr=inlier_thr,
+                            uv_margin=uv_margin)
+        if report is not None:
+            report["scale_search"] = used
     if trust_plan_dims:
         for k, p in enumerate(planes):
             if infos[k]["source"] != "plan" or infos[k].get("at_bound"):
