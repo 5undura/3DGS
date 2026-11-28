@@ -17,9 +17,9 @@
   6) 가장 큰 모델을 수평 맞추고 제약에 다시 맞춤 -> colmap/sparse_aligned/0 -> image_undistorter  (mapper.done)
   기준 자세가 사진의 절반 미만이거나 검증이 실패하면 1차 결과를 그대로 씀 (경고). 1차가 실패하면 db.db 로 mapper.
 속도 (experiments/e2e_v4/SPEED.md):
-  register.pass1_stride N > 1: 2) 의 1차를 N장마다만 (--Mapper.image_list_path colmap/pass1_images.txt).
+  register.pass1_stride N > 1 (기본 3, v4 seed 3개에서 1 보다 접힘이 적음): 2) 의 1차를 N장마다만 (--Mapper.image_list_path colmap/pass1_images.txt).
     4) 에서 빠진 사진의 기준 자세는 같은 1차 모델 안 앞뒤 이웃으로 보간 (회전 slerp, 중심 직선, 순서 간격 2N 이하만).
-  register.pass2_mapper global: 5) 를 db_verified.db 사본(db_global.db)에 view_graph_calibrator -> global_mapper.
+  register.pass2_mapper global (실험용: v4 에서 seed 따라 크게 접힘): 5) 를 db_verified.db 사본(db_global.db)에 view_graph_calibrator -> global_mapper.
     global_mapper 는 위치 제약을 안 씀 (명령줄 옵션 없음, 4.2.1 sfm/global_mapper.cc 는 끝에 Normalize) -> 좌표가 제멋대로라
     6) 수평 맞추기(gimbal_level) + 제약에 다시 맞춤이 꼭 필요. 실패하면 pose_prior_mapper -> mapper 로.
 

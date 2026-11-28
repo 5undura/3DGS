@@ -134,10 +134,10 @@ sequential(앞뒤 `seq_overlap`장, `quadratic_overlap 0`, 루프 검출 없음)
 → `db_verified.db`로 2차 `pose_prior_mapper`(실패하면 `mapper`) → 가장 큰 모델을 수평 맞추고 제약에 닮음 변환으로 맞춤 → `colmap/sparse_aligned/0` → undistort.
 `db_verified.db`에는 매처를 다시 돌리지 않는다 (지운 짝이 되살아남). 기준 자세가 사진의 절반 미만이면 1차 결과를 그대로 쓴다.
 완료 표시: `matching.done`(내용 = 방식) `pass1.done`(내용 = priors.json 지문, 바뀌면 매칭부터 다시) `candidates.done` `verify.done`(통계) `mapper.done`. sequential 매칭은 항상 `quadratic_overlap 0`.
-속도 옵션 (`experiments/e2e_v4/SPEED.md`): `register.pass1_stride` N > 1 이면 1차를 N장마다만(`--Mapper.image_list_path colmap/pass1_images.txt`)
+속도 옵션 (`experiments/e2e_v4/SPEED.md`): `register.pass1_stride` (기본 3) N > 1 이면 1차를 N장마다만(`--Mapper.image_list_path colmap/pass1_images.txt`)
 돌리고 빠진 사진의 기준 자세는 같은 1차 모델 안 앞뒤 이웃으로 보간(회전 slerp·중심 직선, 순서 간격 2N 이하만; `reference.interpolated`).
 `pass1.done` 내용에 `|stride=N` 이 붙고(1 이면 예전 그대로), 바뀌면 후보 짝 전이면 1차부터, 후 이면 매칭부터 다시. `verify.done` settings 에도 `pass1_stride`(1 아닐 때).
-`register.pass2_mapper: global` 이면 2차를 `db_verified.db` 사본 `db_global.db` 에 `view_graph_calibrator` → `global_mapper` (위치 제약 안 씀 → 수평 맞춤 + 제약에 맞춤이 필수,
+`register.pass2_mapper: global`(실험용, 기본 incremental) 이면 2차를 `db_verified.db` 사본 `db_global.db` 에 `view_graph_calibrator` → `global_mapper` (위치 제약 안 씀 → 수평 맞춤 + 제약에 맞춤이 필수,
 `gimbal_level: false` 면 `aligned: false`). 실패하면 `pose_prior_mapper` → `mapper`. register.json 에 `pass1_stride`·`pass2_mapper` 기록, `pass2_mapper` 가 바뀌면 2차부터 다시.
 
 ### diagnose.json (diagnose가 씀)

@@ -89,6 +89,8 @@ GUI 의 **프로젝트** 화면에서도 구간·영상이 맞는지 볼 수 있
   합성 복도에서 접힘·순간이동이 없어짐 (`experiments/prior_matching/RESULTS.md`). 정합 시간은 대략 두 배.
   손으로 기울여 찍은 영상이면 `gimbal_level: false`. 예전 한 번 정합으로 돌리려면 `pair_verify: false`.
   후보 범위: `verify_max_distance`(12 m, 매칭이 너무 오래 걸리면 8), `verify_max_neighbors`(300). 6 m·80장은 부족했음
+  속도: 1차는 기본 3장마다만 정합하고 사이는 보간 (`pass1_stride: 3`, 예전처럼 전부면 1). 합성 복도에서 더 빠르고 접힘도 줄었음 (`experiments/e2e_v4/SPEED.md`).
+  `pass2_mapper: global` 은 2차가 4~5배 빠르지만 **실험용, 위험** (seed 에 따라 크게 접힘). 쓰면 diagnose 결과(순간이동·뺀 사진)를 꼭 확인
 - 끝난 단계는 다시 안 돌림. 중간에 꺼도 다음에 이어서 실행
 - 로그는 화면 아래, 파일은 `logs\<구간>_<단계>.log`
 - 학습 시간(3060 Ti, 복도 1): Brush default 약 36분, LichtFeld default 약 1.5시간. 추출·정합은 따로

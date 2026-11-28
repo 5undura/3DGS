@@ -12,6 +12,7 @@
 | 11-28 | Fable 검토: 직진 구간 수평 맞추기 오류(최악 100° → 0.15°), priors 변경·--rerun 시 낡은 1차 결과 재사용, mapper 폴백 시 aligned 오표시, 검증 설정 변경 시 옛 검증 재사용 수정 | 테스트 295 통과 | a112eec, eea85ad |
 | 11-28 | 끝까지 확인(e2e_v4): 실제 register 단계 코드(pycolmap shim) → diagnose → walls | 255/261장, 틀림 0, 순간이동 0 (예전 한 번 정합: 뒤집힘·순간이동 10). 벽 4면 맞춤(모델 안 0.3 cm), 도면 좌표로는 동선 축척 4.8% 오차로 옆 벽 5~7 cm·천장 11 cm 안쪽 | (이 커밋) |
 | 11-28 | 제안 구현 (지운 승인): walls 축척 확인 `scale_check` + 먼 끝 벽 2차 탐색 `fit_scaled` (초기 점은 기본 안 심음), diagnose `far_from_prior` 문턱 = 직접 맞춤 잔차 x 5 (1~2 m) + 뒤집힌 모델이면 실패 | e2e_v4 다시: 끝 벽 2/2 맞춤 (모델 안 오차 0.4~1.6 cm), 축척 경고 0.941. 맞는 사진 오삭제 18 → 8. 한 번 정합(plain) 뒤집힘 잡음 (위 방향 z -0.84), pv 통과 (+0.98). 테스트 +8 | (커밋 안 함) |
+| 11-28 | 정합 속도: 1차 솎아 정합 `register.pass1_stride`(기본 3, `--Mapper.image_list_path` + 같은 모델 안 보간) + 2차 `pass2_mapper: global`(실험용) | v4 seed 3개: stride 3·5 incremental 모두 틀림 0·순간이동 0, stride 1 은 3번 중 2번 접힘(이전 255/0/0 재현 안 됨). 1차 147 → 26 s, 전체 713 → 482 s. global 2차 5배 빠르나 seed 따라 121장 틀림. 실제 1,380장 추정 6~7 h → 약 3.8 h. 테스트 325 (`experiments/e2e_v4/SPEED.md`) | (커밋 전) |
 | 11-28 | 후처리 뒤 짧은 재학습 단계 `finetune` 구현 (fill 뒤·merge 앞, Brush `init.ply` + `--start-iter`, 1000 반복, 늘리기 없음·학습률 고정, LichtFeld 는 건너뜀). merge 는 유효한 `finetune/splat_ft.ply` 우선. `walls.snap`·`flatten` 은 안 적으면 finetune+Brush+seed 일 때 켬 | 테스트 통과 (finetune 8개 추가). Brush 옵션 이름은 v0.3.0 소스로만 확인, PC `--help` 확인 필요 | (커밋 전) |
 
 ## 단계별 상세

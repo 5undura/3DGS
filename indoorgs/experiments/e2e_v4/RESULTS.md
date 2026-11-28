@@ -4,6 +4,9 @@
 도면은 줄자 오차 흉내: 끝 벽 x0 10 cm·xL 20 cm 바깥, 옆 벽 5 cm 씩 바깥, 천장 10 cm 낮게. 동선 = `path_good.json` (prior 단계가 만든 priors 는 `priors_good.json` 과 같음).
 데이터: `/tmp/claude-0/-home-user-3DGS/5698f89c-b779-591a-9900-84c73f83daf3/scratchpad/e2e_v4/{pv, pv_s1, plain}` (지워질 수 있음)
 
+> **11-28 추가: 1번 결론은 재현 안 됨.** 같은 설정(pass1_stride 1)을 다시 돌리면 매칭이 조금 달라져 2차 seed 0·2 에서 접힘 (71·97장 틀림, 순간이동 10).
+> 1차를 3장마다(`pass1_stride: 3`, 새 기본)로 하면 seed 3개 모두 255장·틀림 0·순간이동 0 → `SPEED.md`.
+
 ## 결론
 
 1. **두 번 정합(pair_verify) 실제 단계 코드: 255/261장, 틀린 사진 0 (Sim3 >0.5 m 0), 순간이동 0, seed 0·1 같음.** 옵션 이름 오류 없음.

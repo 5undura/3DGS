@@ -64,5 +64,5 @@ cp -a $W/s3 $W/s3g && mv $W/s3g/sections/v4/data $W/s3g/sections/v4/data_inc
 python run_e2e.py $V $W/s3g --venv $PY --pass1-stride 3 --pass2-mapper global --until register
 python run_e2e.py $V $W/s3g --venv $PY --pass1-stride 3 --pass2-mapper global --rerun diagnose
 python eval_e2e.py $V $W/s3 $W/s3g
-python <scratchpad>/e2e_speed/pass2_sweep.py $V $W/s3 incremental 1 $W/sweep/s3_inc_1   # 2차만 seed 바꿔서
+$PY/bin/python pass2_sweep.py $V $W/s3 incremental 1 $W/sweep/s3_inc_1   # 2차만 seed 바꿔서
 ```
